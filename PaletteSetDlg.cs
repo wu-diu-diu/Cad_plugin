@@ -78,8 +78,13 @@ namespace CoDesignStudy.Cad.PlugIn
             sendButton.Enabled = false;
             try
             {
-                string aiResponse = await GetAIResponse(userMessage);
-                AppendMessage("AI", aiResponse);
+                // 先插入一个空的AI气泡，准备流式刷新，返回一个webbrowser控件
+                var aiContentControl = AppendMessage("AI", "", true);
+                // 将控件传给getairesoponense， 这个就会一边返回内容一遍刷新，展示在界面
+                await GetAIResponse(userMessage, aiContentControl);
+
+                //string aiResponse = await GetAIResponse(userMessage);
+                //AppendMessage("AI", aiResponse);
             }
             finally
             {
@@ -87,9 +92,9 @@ namespace CoDesignStudy.Cad.PlugIn
             }
         }
 
-        private void AppendMessage(string sender, string message)
+        private Control AppendMessage(string sender, string message, bool isStreaming = false)
         {
-            if (string.IsNullOrWhiteSpace(message)) return;
+            if (string.IsNullOrWhiteSpace(message) && !isStreaming) return null;
 
             Control contentControl;
 
@@ -179,9 +184,11 @@ namespace CoDesignStudy.Cad.PlugIn
             // 滚动到底
             conversationPanel.Controls.Add(new Panel() { Height = 10, Dock = DockStyle.Top });
             conversationPanel.ScrollControlIntoView(container);
+
+            return contentControl;
         }
 
-        private async Task<string> GetAIResponse(string userMessage)
+        private async Task<string> GetAIResponse(string userMessage, Control contentControl)
         {
             string apikey = "sk-8812dc6bd29845c897813c3cfeb83a34";
 
@@ -225,6 +232,13 @@ namespace CoDesignStudy.Cad.PlugIn
                     if (!string.IsNullOrEmpty(msg))
                     {
                         resultMsg.Append(msg);
+                        // 实时刷新Markdown内容
+                        if (contentControl is WebBrowser browser)
+                        {
+                            string html = Markdig.Markdown.ToHtml(resultMsg.ToString());
+                            browser.DocumentText = $"<html><body>{html}</body></html>";
+                        }
+
                     }
                 },
                 errorCallback: (ex) =>
