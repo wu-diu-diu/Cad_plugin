@@ -8,7 +8,12 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using Markdig;  // 支持Markdown语法
 using Microsoft.Web.WebView2.WinForms; 
-using Microsoft.Web.WebView2.Core;     
+using Microsoft.Web.WebView2.Core;
+using Autodesk.AutoCAD.ApplicationServices;
+//using Autodesk.AutoCAD.Runtime;
+using CADApplication = Autodesk.AutoCAD.ApplicationServices.Application;
+using Autodesk.AutoCAD.DatabaseServices;
+using Autodesk.AutoCAD.EditorInput;
 
 namespace CoDesignStudy.Cad.PlugIn
 {
@@ -67,6 +72,48 @@ namespace CoDesignStudy.Cad.PlugIn
             this.Controls.Add(inputPanel);
         }
 
+        public void HighlightALLTexts()
+        {
+            // DocumentManager是对多个文档进行管理的，每个dwg文件视为一个文档
+            // MdiActiveDocument表示当前激活的文档，即当前界面打开的文档
+            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
+
+            // 每一个dwg文件可以看作一个数据库，类似一个excel表格，存储着不同类别的数据
+            // blocktable是所有的图元数据，即线，圆，所有能在图纸中选中的图形
+            // layertable是所有的图层数据
+            // dimstyletable是所有的文字数据
+
+            Database db = doc.Database;  // 获取当前文档的数据库对象
+            Editor ed = doc.Editor;  // 获取当前文档的编辑器对象
+            // 启动事务，这里的tr可以看作图元，即图纸
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                // 以只读模式打开图元的数据库的
+                BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                BlockTableRecord btr = tr.GetObject(db.CurrentSpaceId, OpenMode.ForRead) as BlockTableRecord;  // 获取模型空间
+
+                foreach (ObjectId id in btr)
+                {
+                    var ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
+                    if (ent is DBText || ent is MText)
+                    {
+                        ent.UpgradeOpen();
+                        ent.Highlight();
+                    }
+                }
+                tr.Commit();
+            }
+        }
+        public void DrawCircleWithLisp()
+        {
+            // 获取当前文档
+            Document doc = CADApplication.DocumentManager.MdiActiveDocument;  // 打开当前激活的文档
+            // AutoLISP 代码：在(100,100)处画半径为50的圆
+            string lisp = "(command \"CIRCLE\" '(100 100 0) 1500) ";
+            // 执行 AutoLISP 代码
+            doc.SendStringToExecute(lisp, true, false, false);
+        }
+
         private async void SendButton_Click(object sender, EventArgs e)
         {
             if (string.IsNullOrWhiteSpace(inputTextBox.Text))
@@ -91,6 +138,8 @@ namespace CoDesignStudy.Cad.PlugIn
             {
                 sendButton.Enabled = true;
             }
+            DrawCircleWithLisp();
+            HighlightALLTexts();
         }
 
         private async Task<Control> AppendMessageAsync(string sender, string message, bool isStreaming = false, Action<Action<string>> setUpdateContent = null)
@@ -167,7 +216,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 {
                     Text = message,
                     AutoSize = true,
-                    Font = new Font("微软雅黑", 10),
+                    Font = new System.Drawing.Font("微软雅黑", 10),
                     MaximumSize = new Size(conversationPanel.Width - 150, 0),
                     Padding = new Padding(10),
                     BackColor = Color.LightBlue,
@@ -182,14 +231,14 @@ namespace CoDesignStudy.Cad.PlugIn
                 SizeMode = PictureBoxSizeMode.Zoom,
                 Margin = new Padding(5),
                 Image = sender == "用户"
-                    ? Image.FromFile("userAvatar.png")
-                    : Image.FromFile("aiAvatar.png")
+                    ? System.Drawing.Image.FromFile("userAvatar.png")
+                    : System.Drawing.Image.FromFile("aiAvatar.png")
             };
 
             var horizontalPanel = new FlowLayoutPanel
             {
                 AutoSize = true,
-                FlowDirection = sender == "用户" ? FlowDirection.RightToLeft : FlowDirection.LeftToRight,
+                FlowDirection = sender == "用户" ? System.Windows.Forms.FlowDirection.RightToLeft : System.Windows.Forms.FlowDirection.LeftToRight,
                 WrapContents = false
             };
 
@@ -200,7 +249,7 @@ namespace CoDesignStudy.Cad.PlugIn
             {
                 AutoSize = true,
                 Dock = DockStyle.Top,
-                FlowDirection = FlowDirection.LeftToRight,
+                FlowDirection = System.Windows.Forms.FlowDirection.LeftToRight,
                 WrapContents = false,
                 Padding = new Padding(0),
                 Margin = new Padding(0)
