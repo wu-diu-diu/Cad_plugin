@@ -7,6 +7,8 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Markdig;  // 支持Markdown语法
+using Microsoft.Web.WebView2.WinForms; 
+using Microsoft.Web.WebView2.Core;     
 
 namespace CoDesignStudy.Cad.PlugIn
 {
@@ -73,18 +75,17 @@ namespace CoDesignStudy.Cad.PlugIn
             string userMessage = inputTextBox.Text.Trim();
             inputTextBox.Clear();
 
-            AppendMessage("用户", userMessage);
+            await AppendMessageAsync("用户", userMessage);
 
             sendButton.Enabled = false;
             try
             {
-                // 先插入一个空的AI气泡，准备流式刷新，返回一个webbrowser控件
-                var aiContentControl = AppendMessage("AI", "", true);
-                // 将控件传给getairesoponense， 这个就会一边返回内容一遍刷新，展示在界面
-                await GetAIResponse(userMessage, aiContentControl);
+                Action<string> updateFunc = null;
 
-                //string aiResponse = await GetAIResponse(userMessage);
-                //AppendMessage("AI", aiResponse);
+                // 等待 AI 控件初始化并获得更新函数
+                var aiContentControl = await AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
+
+                await GetAIResponse(userMessage, updateFunc);
             }
             finally
             {
@@ -92,7 +93,7 @@ namespace CoDesignStudy.Cad.PlugIn
             }
         }
 
-        private Control AppendMessage(string sender, string message, bool isStreaming = false)
+        private async Task<Control> AppendMessageAsync(string sender, string message, bool isStreaming = false, Action<Action<string>> setUpdateContent = null)
         {
             if (string.IsNullOrWhiteSpace(message) && !isStreaming) return null;
 
@@ -100,28 +101,68 @@ namespace CoDesignStudy.Cad.PlugIn
 
             if (sender == "AI")
             {
-                // 将Markdown转为HTML
-                string html = Markdig.Markdown.ToHtml(message ?? "");
-                var browser = new WebBrowser
+                var webView = new WebView2
                 {
-                    DocumentText = "<html><body style='font-family:微软雅黑;font-size:10pt;background-color:#90ee90;margin:0;padding:0;'>" + html + "</body></html>",
                     Width = conversationPanel.Width - 150,
-                    Height = 0, // 后面自适应
-                    ScrollBarsEnabled = false
+                    Margin = new Padding(0),
+                    Height = 1,
+                    DefaultBackgroundColor = Color.White
                 };
-                browser.DocumentCompleted += (s, e) =>
+
+                await webView.EnsureCoreWebView2Async();
+
+                if (webView.CoreWebView2 != null)
                 {
-                    // 自适应高度
-                    if (browser.Document != null && browser.Document.Body != null)
+                    webView.CoreWebView2.WebMessageReceived += (s, a) =>
                     {
-                        browser.Height = browser.Document.Body.ScrollRectangle.Height + 10;
+                        if (int.TryParse(a.WebMessageAsJson, out int height))
+                        {
+                            int adjustedHeight = height;
+                            if (webView.InvokeRequired)
+                            {
+                                webView.Invoke(new Action(() =>
+                                {
+                                    webView.Height = Math.Max(adjustedHeight, 1);
+                                }));
+                            }
+                            else
+                            {
+                                webView.Height = Math.Max(adjustedHeight, 1);
+                            }
+                        }
+                    };
+
+                    string html = Markdig.Markdown.ToHtml(message ?? "");
+                    string doc = $"<html><body id='body' style='font-family:微软雅黑;font-size:10pt;background-color:#FFFFFF;margin:0;padding:0;'>{html}<script>function setContent(html){{const body = document.getElementById('body'); body.innerHTML=html; setTimeout(() => {{ const height = Math.max(body.scrollHeight, document.documentElement.scrollHeight); window.chrome.webview.postMessage(height); }}, 0);}} const initialHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight); window.chrome.webview.postMessage(initialHeight);</script></body></html>";
+                    webView.CoreWebView2.NavigateToString(doc);
+
+                    if (setUpdateContent != null)
+                    {
+                        Action<string> updateContent = (newContent) =>
+                        {
+                            if (webView.InvokeRequired)
+                            {
+                                webView.Invoke(new Action(() =>
+                                {
+                                    string htmlUpdate = Markdig.Markdown.ToHtml(newContent).Replace("`", "\\`");
+                                    webView.CoreWebView2.ExecuteScriptAsync($"setContent(`{htmlUpdate}`);");
+                                }));
+                            }
+                            else
+                            {
+                                string htmlUpdate = Markdig.Markdown.ToHtml(newContent).Replace("`", "\\`");
+                                webView.CoreWebView2.ExecuteScriptAsync($"setContent(`{htmlUpdate}`);");
+                            }
+                        };
+
+                        setUpdateContent(updateContent);
                     }
-                };
-                contentControl = browser;
+                }
+
+                contentControl = webView;
             }
             else
             {
-                // 用户消息仍用Label
                 contentControl = new Label
                 {
                     Text = message,
@@ -145,7 +186,6 @@ namespace CoDesignStudy.Cad.PlugIn
                     : Image.FromFile("aiAvatar.png")
             };
 
-            // 水平容器
             var horizontalPanel = new FlowLayoutPanel
             {
                 AutoSize = true,
@@ -156,7 +196,6 @@ namespace CoDesignStudy.Cad.PlugIn
             horizontalPanel.Controls.Add(avatar);
             horizontalPanel.Controls.Add(contentControl);
 
-            // 外层FlowLayoutPanel，控制整体对齐
             var container = new FlowLayoutPanel
             {
                 AutoSize = true,
@@ -188,57 +227,51 @@ namespace CoDesignStudy.Cad.PlugIn
             return contentControl;
         }
 
-        private async Task<string> GetAIResponse(string userMessage, Control contentControl)
+
+        private async Task<string> GetAIResponse(string userMessage, Action<string> updateContent)
         {
             string apikey = "sk-8812dc6bd29845c897813c3cfeb83a34";
 
-            var ds = new DeepSeek.Sdk.DeepSeek(apikey); //
+            var ds = new DeepSeek.Sdk.DeepSeek(apikey);
 
             var resultMsg = new StringBuilder();
 
             var chatReq = new ChatRequest
             {
                 Messages = new List<ChatRequest.MessagesType>
-                {
-                    new ChatRequest.MessagesType
-                    {
-                        Role = ChatRequest.RoleEnum.System,
-                        Content = "你的名字是“电气设计助手”，是一个电气设计领域的AutoCAD助手，请回答有关电气设计领域的CAD操作的问题或者相关的电气知识"
-                    },
-                    new ChatRequest.MessagesType
-                    {
-                        Role = ChatRequest.RoleEnum.Assistant,
-                        Content = "" // 可选：历史助手内容
-                    },
-                    new ChatRequest.MessagesType
-                    {
-                        Role = ChatRequest.RoleEnum.User,
-                        Content = userMessage
-                    }
-                },
+        {
+            new ChatRequest.MessagesType
+            {
+                Role = ChatRequest.RoleEnum.System,
+                Content = "你的名字是\"电气设计助手\"，是一个电气设计领域的AutoCAD助手，请回答有关电气设计领域的CAD操作的问题或者相关的电气知识"
+            },
+            new ChatRequest.MessagesType
+            {
+                Role = ChatRequest.RoleEnum.Assistant,
+                Content = ""
+            },
+            new ChatRequest.MessagesType
+            {
+                Role = ChatRequest.RoleEnum.User,
+                Content = userMessage
+            }
+        },
                 Model = ChatRequest.ModelEnum.DeepseekChat,
                 Stream = true
             };
 
-            // 使用 TaskCompletionSource 等待流式回调结束
             var tcs = new TaskCompletionSource<string>();
 
             await ds.ChatStream(chatReq,
-                openedCallBack: (state) => { /* 可选：处理连接打开 */ },
+                openedCallBack: (state) => { },
                 closedCallBack: (state) => { tcs.TrySetResult(resultMsg.ToString()); },
-                msgCallback: (res) =>
+                msgCallback: async (res) =>
                 {
                     string msg = res.Choices.FirstOrDefault()?.Delta?.Content;
                     if (!string.IsNullOrEmpty(msg))
                     {
                         resultMsg.Append(msg);
-                        // 实时刷新Markdown内容
-                        if (contentControl is WebBrowser browser)
-                        {
-                            string html = Markdig.Markdown.ToHtml(resultMsg.ToString());
-                            browser.DocumentText = $"<html><body>{html}</body></html>";
-                        }
-
+                        updateContent?.Invoke(resultMsg.ToString());
                     }
                 },
                 errorCallback: (ex) =>
@@ -246,9 +279,9 @@ namespace CoDesignStudy.Cad.PlugIn
                     tcs.TrySetException(new Exception(ex));
                 });
 
-            // 等待流式对话完成
             return await tcs.Task;
         }
+
 
         private void InputTextBox_KeyDown(object sender, KeyEventArgs e)
         {
