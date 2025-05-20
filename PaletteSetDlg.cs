@@ -17,7 +17,6 @@ using Autodesk.AutoCAD.EditorInput;
 
 namespace CoDesignStudy.Cad.PlugIn
 {
-
     public partial class PaletteSetDlg : UserControl
     {
         private Panel conversationPanel;
@@ -74,6 +73,8 @@ namespace CoDesignStudy.Cad.PlugIn
             this.Controls.Add(conversationPanel);
             this.Controls.Add(inputPanel);
         }
+
+       
 
         private async void SendButton_Click(object sender, EventArgs e)
         {
@@ -202,7 +203,9 @@ namespace CoDesignStudy.Cad.PlugIn
             {
                 AutoSize = true,
                 FlowDirection = sender == "用户" ? System.Windows.Forms.FlowDirection.RightToLeft : System.Windows.Forms.FlowDirection.LeftToRight,
-                WrapContents = false
+                WrapContents = false,
+                Margin = new Padding(0),
+                Padding = new Padding(0)
             };
 
             horizontalPanel.Controls.Add(avatar);
@@ -210,12 +213,12 @@ namespace CoDesignStudy.Cad.PlugIn
 
             var container = new FlowLayoutPanel
             {
-                AutoSize = true,
-                Dock = DockStyle.Top,
-                FlowDirection = System.Windows.Forms.FlowDirection.LeftToRight,
-                WrapContents = false,
+                AutoSize = true,                       // ✅ 必须，确保高度自适应
+                Anchor = AnchorStyles.Left,           // ✅ 防止错位
+                Margin = new Padding(0),              // ✅ 清除默认边距
                 Padding = new Padding(0),
-                Margin = new Padding(0)
+                FlowDirection = System.Windows.Forms.FlowDirection.LeftToRight,
+                WrapContents = false
             };
 
             if (sender == "用户")
@@ -230,7 +233,7 @@ namespace CoDesignStudy.Cad.PlugIn
             }
 
             conversationPanel.Controls.Add(container);
-            conversationPanel.Controls.SetChildIndex(container, 0);
+            //conversationPanel.Controls.SetChildIndex(container, 0);
 
             // 滚动到底
             conversationPanel.Controls.Add(new Panel() { Height = 10, Dock = DockStyle.Top });
