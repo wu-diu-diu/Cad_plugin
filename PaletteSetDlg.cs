@@ -17,6 +17,7 @@ using Autodesk.AutoCAD.EditorInput;
 
 namespace CoDesignStudy.Cad.PlugIn
 {
+
     public partial class PaletteSetDlg : UserControl
     {
         private Panel conversationPanel;
@@ -34,11 +35,13 @@ namespace CoDesignStudy.Cad.PlugIn
             this.MinimumSize = new Size(400, 300);
 
             // 对话区域（使用Panel以支持自定义消息气泡布局）
-            conversationPanel = new Panel
+            conversationPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 AutoScroll = true,
-                BackColor = Color.White
+                BackColor = Color.White,
+                FlowDirection = System.Windows.Forms.FlowDirection.TopDown,
+                WrapContents = false
             };
             conversationPanel.Resize += ConversationPanel_Resize;
 
@@ -72,48 +75,6 @@ namespace CoDesignStudy.Cad.PlugIn
             this.Controls.Add(inputPanel);
         }
 
-        public void HighlightALLTexts()
-        {
-            // DocumentManager是对多个文档进行管理的，每个dwg文件视为一个文档
-            // MdiActiveDocument表示当前激活的文档，即当前界面打开的文档
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-
-            // 每一个dwg文件可以看作一个数据库，类似一个excel表格，存储着不同类别的数据
-            // blocktable是所有的图元数据，即线，圆，所有能在图纸中选中的图形
-            // layertable是所有的图层数据
-            // dimstyletable是所有的文字数据
-
-            Database db = doc.Database;  // 获取当前文档的数据库对象
-            Editor ed = doc.Editor;  // 获取当前文档的编辑器对象
-            // 启动事务，这里的tr可以看作图元，即图纸
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                // 以只读模式打开图元的数据库的
-                BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                BlockTableRecord btr = tr.GetObject(db.CurrentSpaceId, OpenMode.ForRead) as BlockTableRecord;  // 获取模型空间
-
-                foreach (ObjectId id in btr)
-                {
-                    var ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                    if (ent is DBText || ent is MText)
-                    {
-                        ent.UpgradeOpen();
-                        ent.Highlight();
-                    }
-                }
-                tr.Commit();
-            }
-        }
-        public void DrawCircleWithLisp()
-        {
-            // 获取当前文档
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;  // 打开当前激活的文档
-            // AutoLISP 代码：在(100,100)处画半径为50的圆
-            string lisp = "(command \"CIRCLE\" '(100 100 0) 1500) ";
-            // 执行 AutoLISP 代码
-            doc.SendStringToExecute(lisp, true, false, false);
-        }
-
         private async void SendButton_Click(object sender, EventArgs e)
         {
             if (string.IsNullOrWhiteSpace(inputTextBox.Text))
@@ -138,8 +99,6 @@ namespace CoDesignStudy.Cad.PlugIn
             {
                 sendButton.Enabled = true;
             }
-            DrawCircleWithLisp();
-            HighlightALLTexts();
         }
 
         private async Task<Control> AppendMessageAsync(string sender, string message, bool isStreaming = false, Action<Action<string>> setUpdateContent = null)
@@ -195,12 +154,16 @@ namespace CoDesignStudy.Cad.PlugIn
                                 {
                                     string htmlUpdate = Markdig.Markdown.ToHtml(newContent).Replace("`", "\\`");
                                     webView.CoreWebView2.ExecuteScriptAsync($"setContent(`{htmlUpdate}`);");
+                                    // 滚动到底部
+                                    conversationPanel.ScrollControlIntoView(webView);
                                 }));
                             }
                             else
                             {
                                 string htmlUpdate = Markdig.Markdown.ToHtml(newContent).Replace("`", "\\`");
                                 webView.CoreWebView2.ExecuteScriptAsync($"setContent(`{htmlUpdate}`);");
+                                // 滚动到底部
+                                conversationPanel.ScrollControlIntoView(webView);
                             }
                         };
 
