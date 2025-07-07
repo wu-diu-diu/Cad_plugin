@@ -4,11 +4,14 @@ using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.Runtime;
 using Autodesk.AutoCAD.Windows;
+using BoundingRectangle;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
+using System.Xml.Schema;
 using static System.Net.Mime.MediaTypeNames;
 using CADApplication = Autodesk.AutoCAD.ApplicationServices.Application;
 
@@ -19,6 +22,7 @@ namespace CoDesignStudy.Cad.PlugIn
     /// <summary>
     /// 入口
     /// </summary>
+    
     public class Command : IExtensionApplication
     {
         #region 成员变量
@@ -151,7 +155,30 @@ namespace CoDesignStudy.Cad.PlugIn
                 tr.Commit();
             }
         }
+        private void DrawGreenRectangleByPoints(List<double[]> rectPoints, Database db)
+        {
+            if (rectPoints == null || rectPoints.Count != 4) return;
 
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+                for (int i = 0; i < 4; i++)
+                {
+                    double[] start = rectPoints[i];
+                    double[] end = rectPoints[(i + 1) % 4];
+                    Line line = new Line(
+                        new Point3d(start[0], start[1], 0),
+                        new Point3d(end[0], end[1], 0)
+                    );
+                    line.ColorIndex = 3; // 绿色
+                    modelSpace.AppendEntity(line);
+                    tr.AddNewlyCreatedDBObject(line, true);
+                }
+                tr.Commit();
+            }
+        }
         private bool IsChineseText(string text)
         {
             // 正则表达式匹配中文字符（包括标点符号）
@@ -169,721 +196,6 @@ namespace CoDesignStudy.Cad.PlugIn
             doc.SendStringToExecute(lisp, true, false, false);
         }
 
-        [CommandMethod("ZZ", CommandFlags.Session)]
-        public void InsertBlockFromDwg()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\test.dwg"; // 
-            string blockName = "ZhaoMing";
-            string targetLayer = "照明";
-
-            using (DocumentLock docLock = doc.LockDocument())
-            {
-                // 块插入操作应在事务外部
-                // 这一步导入块定义到数据库中
-                using (Database sourceDb = new Database(false, true))
-                {
-                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
-                    db.Insert(blockName, sourceDb, true);
-                }
-                // 基准点坐标
-                int baseX = 15548;
-                int baseY = 25927;
-                // 房间宽度
-                int offsetX1 = 6317;
-                // 房间长度
-                int offsetY1 = 9234;
-                // 第一个房间和第二个房间之间的距离
-                int offsetX2 = 7000;
-                // 第一个房间和第三个房间的距离
-                int offsetX3 = 14000;
-
-                var insertData = new List<(Point3d point, double angleDeg)>
-    {
-                    (new Point3d(baseX, baseY, 0), 0),
-                    (new Point3d(baseX + offsetX1, baseY, 0), 90),
-                    (new Point3d(baseX, baseY + offsetY1, 0), 270),
-                    (new Point3d(baseX + offsetX1, baseY + offsetY1, 0), 180),
-                    (new Point3d(baseX + offsetX2, baseY, 0), 0),
-                    (new Point3d(baseX + offsetX1 + offsetX2, baseY, 0), 90),
-                    (new Point3d(baseX + offsetX2, baseY + offsetY1, 0), 270),
-                    (new Point3d(baseX + offsetX1 + offsetX2, baseY + offsetY1, 0), 180),
-                    (new Point3d(baseX + offsetX3, baseY, 0), 0),
-                    (new Point3d(baseX + offsetX1 + offsetX3, baseY, 0), 90),
-                    (new Point3d(baseX + offsetX3, baseY + offsetY1, 0), 270),
-                    (new Point3d(baseX + offsetX1 + offsetX3, baseY + offsetY1, 0), 180),
-                };
-
-                // 这一步将块参照，即块定义的实例，插入到图纸的指定位置中
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord modelSpace = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
-
-
-
-                    // 获取块定义
-                    if (!bt.Has(blockName))
-                    {
-                        doc.Editor.WriteMessage($"\n未找到块定义：{blockName}");
-                        return;
-                    }
-                    // 确保图层存在，不存在则创建
-                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                    foreach (ObjectId layerId in lt)
-                    {
-                        LayerTableRecord ltr = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForRead);
-                        string layerName = ltr.Name;
-                        // 这里可以输出到命令行或收集到列表
-                        doc.Editor.WriteMessage($"\n图层名: {layerName}");
-                    }
-                    if (!lt.Has(targetLayer))
-                    {
-                        lt.UpgradeOpen();
-                        LayerTableRecord newLayer = new LayerTableRecord
-                        {
-                            Name = targetLayer
-                        };
-                        lt.Add(newLayer);
-                        tr.AddNewlyCreatedDBObject(newLayer, true);
-                    }
-
-                    foreach (var (point, angleDeg) in insertData)
-                    {
-                        double angleInRadians = angleDeg * Math.PI / 180.0;
-                        BlockReference br = new BlockReference(point, bt[blockName])
-                        {
-                            Rotation = angleInRadians,
-                            Layer = targetLayer
-                        };
-
-                        modelSpace.AppendEntity(br);
-                        tr.AddNewlyCreatedDBObject(br, true);
-                    }
-                    tr.Commit();
-                }
-            }
-        }
-
-        [CommandMethod("ZL", CommandFlags.Session)]
-        public void InsertZhaoMingLineFromDwg()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\zhaoming_line.dwg"; // 
-            string blockName = "ZhaoMing-Line";
-            string targetLayer = "WIRE-照明";
-            Point3d insertPoint = new Point3d(15553, 25923, 0); // 插入点
-
-            using (DocumentLock docLock = doc.LockDocument())
-            {
-                // 块插入操作应在事务外部
-                // 这一步导入块定义到数据库中
-                using (Database sourceDb = new Database(false, true))
-                {
-                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
-                    db.Insert(blockName, sourceDb, true);
-                }
-
-                // 这一步将块参照，即块定义的实例，插入到图纸的指定位置中
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord modelSpace = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
-
-                    // 确保图层存在，不存在则创建
-                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                    if (!lt.Has(targetLayer))
-                    {
-                        lt.UpgradeOpen();
-                        LayerTableRecord newLayer = new LayerTableRecord
-                        {
-                            Name = targetLayer
-                        };
-                        lt.Add(newLayer);
-                        tr.AddNewlyCreatedDBObject(newLayer, true);
-                    }
-
-                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
-                    br.Layer = targetLayer; // 指定插入的图层
-                    modelSpace.AppendEntity(br);
-                    tr.AddNewlyCreatedDBObject(br, true);
-                    tr.Commit();
-                }
-            }
-        }
-
-        [CommandMethod("LL", CommandFlags.Session)]
-        public void InsertZhaoMingloutiFromDwg()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\louti-zhaoming.dwg"; // 
-            string blockName = "ZhaoMing-Louti";
-            string targetLayer = "EQUIP-照明";
-            Point3d insertPoint = new Point3d(18629, 24048, 0); // 插入点
-
-            using (DocumentLock docLock = doc.LockDocument())
-            {
-                // 块插入操作应在事务外部
-                // 这一步导入块定义到数据库中
-                using (Database sourceDb = new Database(false, true))
-                {
-                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
-                    db.Insert(blockName, sourceDb, true);
-                }
-
-                // 这一步将块参照，即块定义的实例，插入到图纸的指定位置中
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord modelSpace = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
-
-                    // 确保图层存在，不存在则创建
-                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                    if (!lt.Has(targetLayer))
-                    {
-                        lt.UpgradeOpen();
-                        LayerTableRecord newLayer = new LayerTableRecord
-                        {
-                            Name = targetLayer
-                        };
-                        lt.Add(newLayer);
-                        tr.AddNewlyCreatedDBObject(newLayer, true);
-                    }
-
-                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
-                    br.Layer = targetLayer; // 指定插入的图层
-                    modelSpace.AppendEntity(br);
-                    tr.AddNewlyCreatedDBObject(br, true);
-                    tr.Commit();
-                }
-            }
-        }
-        [CommandMethod("YY", CommandFlags.Session)]
-        public void InsertYinJiZhaoMingFromDwg()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\yinji-new.dwg"; // 
-            string blockName = "ZhaoMing-Yinji";
-            string targetLayer = "照明";
-            Point3d insertPoint = new Point3d(15772, 25615, 2); // 插入点
-
-            using (DocumentLock docLock = doc.LockDocument())
-            {
-                // 块插入操作应在事务外部
-                // 这一步导入块定义到数据库中
-                using (Database sourceDb = new Database(false, true))
-                {
-                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
-                    db.Insert(blockName, sourceDb, true);
-                }
-
-                // 这一步将块参照，即块定义的实例，插入到图纸的指定位置中
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord modelSpace = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
-
-                    // 确保图层存在，不存在则创建
-                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                    if (!lt.Has(targetLayer))
-                    {
-                        lt.UpgradeOpen();
-                        LayerTableRecord newLayer = new LayerTableRecord
-                        {
-                            Name = targetLayer
-                        };
-                        lt.Add(newLayer);
-                        tr.AddNewlyCreatedDBObject(newLayer, true);
-                    }
-
-                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
-                    br.Layer = targetLayer; // 指定插入的图层
-                    modelSpace.AppendEntity(br);
-                    tr.AddNewlyCreatedDBObject(br, true);
-                    tr.Commit();
-                }
-            }
-        }
-        [CommandMethod("YL", CommandFlags.Session)]
-        public void InsertYinJiZhaoLineFromDwg()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\yinji-line.dwg"; // 
-            string blockName = "Yinji-Line";
-            string targetLayer = "WIRE-应急";
-            Point3d insertPoint = new Point3d(17127, 25746, 0); // 插入点
-
-            using (DocumentLock docLock = doc.LockDocument())
-            {
-                // 块插入操作应在事务外部
-                // 这一步导入块定义到数据库中
-                using (Database sourceDb = new Database(false, true))
-                {
-                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
-                    db.Insert(blockName, sourceDb, true);
-                }
-
-                // 这一步将块参照，即块定义的实例，插入到图纸的指定位置中
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord modelSpace = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
-
-                    // 确保图层存在，不存在则创建
-                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                    if (!lt.Has(targetLayer))
-                    {
-                        lt.UpgradeOpen();
-                        LayerTableRecord newLayer = new LayerTableRecord
-                        {
-                            Name = targetLayer
-                        };
-                        lt.Add(newLayer);
-                        tr.AddNewlyCreatedDBObject(newLayer, true);
-                    }
-
-                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
-                    br.Layer = targetLayer; // 指定插入的图层
-                    modelSpace.AppendEntity(br);
-                    tr.AddNewlyCreatedDBObject(br, true);
-                    tr.Commit();
-                }
-            }
-        }
-        [CommandMethod("CC", CommandFlags.Session)]
-        public void InsertChaZuoFromDwg()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\chazuo.dwg"; // 
-            string blockName = "Chazuo";
-            string targetLayer = "插座";
-            Point3d insertPoint = new Point3d(15615, 27917, 0); // 插入点
-
-            using (DocumentLock docLock = doc.LockDocument())
-            {
-                // 块插入操作应在事务外部
-                // 这一步导入块定义到数据库中
-                using (Database sourceDb = new Database(false, true))
-                {
-                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
-                    db.Insert(blockName, sourceDb, true);
-                }
-
-                // 这一步将块参照，即块定义的实例，插入到图纸的指定位置中
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord modelSpace = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
-
-                    // 确保图层存在，不存在则创建
-                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                    if (!lt.Has(targetLayer))
-                    {
-                        lt.UpgradeOpen();
-                        LayerTableRecord newLayer = new LayerTableRecord
-                        {
-                            Name = targetLayer
-                        };
-                        lt.Add(newLayer);
-                        tr.AddNewlyCreatedDBObject(newLayer, true);
-                    }
-
-                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
-                    br.Layer = targetLayer; // 指定插入的图层
-                    modelSpace.AppendEntity(br);
-                    tr.AddNewlyCreatedDBObject(br, true);
-                    tr.Commit();
-                }
-            }
-        }
-        [CommandMethod("CL", CommandFlags.Session)]
-        public void InsertChaZuoLineFromDwg()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\chazuo-line.dwg"; // 
-            string blockName = "Chazuo-Line";
-            string targetLayer = "WIRE-插座";
-            Point3d insertPoint = new Point3d(15615, 32413, 2); // 插入点
-
-            using (DocumentLock docLock = doc.LockDocument())
-            {
-                // 块插入操作应在事务外部
-                // 这一步导入块定义到数据库中
-                using (Database sourceDb = new Database(false, true))
-                {
-                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
-                    db.Insert(blockName, sourceDb, true);
-                }
-
-                // 这一步将块参照，即块定义的实例，插入到图纸的指定位置中
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord modelSpace = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
-
-                    // 确保图层存在，不存在则创建
-                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                    if (!lt.Has(targetLayer))
-                    {
-                        lt.UpgradeOpen();
-                        LayerTableRecord newLayer = new LayerTableRecord
-                        {
-                            Name = targetLayer
-                        };
-                        lt.Add(newLayer);
-                        tr.AddNewlyCreatedDBObject(newLayer, true);
-                    }
-
-                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
-                    br.Layer = targetLayer; // 指定插入的图层
-                    modelSpace.AppendEntity(br);
-                    tr.AddNewlyCreatedDBObject(br, true);
-                    tr.Commit();
-                }
-            }
-        }
-        [CommandMethod("ZS", CommandFlags.Session)]
-        public void InsertZhuShiFromDwg()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\zhaoming-text.dwg"; // 
-            string blockName = "ZhaoMing-Text";
-            string targetLayer = "照明";
-            Point3d insertPoint = new Point3d(18289, 30122, 0); // 插入点
-
-            using (DocumentLock docLock = doc.LockDocument())
-            {
-                // 块插入操作应在事务外部
-                // 这一步导入块定义到数据库中
-                using (Database sourceDb = new Database(false, true))
-                {
-                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
-                    db.Insert(blockName, sourceDb, true);
-                }
-
-                // 这一步将块参照，即块定义的实例，插入到图纸的指定位置中
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord modelSpace = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
-
-                    // 确保图层存在，不存在则创建
-                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                    if (!lt.Has(targetLayer))
-                    {
-                        lt.UpgradeOpen();
-                        LayerTableRecord newLayer = new LayerTableRecord
-                        {
-                            Name = targetLayer
-                        };
-                        lt.Add(newLayer);
-                        tr.AddNewlyCreatedDBObject(newLayer, true);
-                    }
-
-                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
-                    br.Layer = targetLayer; // 指定插入的图层
-                    modelSpace.AppendEntity(br);
-                    tr.AddNewlyCreatedDBObject(br, true);
-                    tr.Commit();
-                }
-            }
-        }
-
-        [CommandMethod("EE", CommandFlags.Session)]
-        public void InsertZhuShiErrorFromDwg()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\zhaoming-text-error.dwg"; // 
-            string blockName = "ZhaoMing-Text-error";
-            string targetLayer = "照明";
-            Point3d insertPoint = new Point3d(18635, 23173, 1); // 插入点
-
-            using (DocumentLock docLock = doc.LockDocument())
-            {
-                // 块插入操作应在事务外部
-                // 这一步导入块定义到数据库中
-                using (Database sourceDb = new Database(false, true))
-                {
-                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
-                    db.Insert(blockName, sourceDb, true);
-                }
-
-                // 这一步将块参照，即块定义的实例，插入到图纸的指定位置中
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord modelSpace = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
-
-                    // 确保图层存在，不存在则创建
-                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                    if (!lt.Has(targetLayer))
-                    {
-                        lt.UpgradeOpen();
-                        LayerTableRecord newLayer = new LayerTableRecord
-                        {
-                            Name = targetLayer
-                        };
-                        lt.Add(newLayer);
-                        tr.AddNewlyCreatedDBObject(newLayer, true);
-                    }
-
-                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
-                    br.Layer = targetLayer; // 指定插入的图层
-                    modelSpace.AppendEntity(br);
-                    tr.AddNewlyCreatedDBObject(br, true);
-                    tr.Commit();
-                }
-            }
-        }
-
-        [CommandMethod("TL", CommandFlags.Session)]
-        public void InsertTuLiFromDwg()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\tuli.dwg"; // 
-            string blockName = "TuLi";
-            string targetLayer = "PUB_TEXT";
-            Point3d insertPoint = new Point3d(4182, 4113, 2); // 插入点
-
-            using (DocumentLock docLock = doc.LockDocument())
-            {
-                // 块插入操作应在事务外部
-                // 这一步导入块定义到数据库中
-                using (Database sourceDb = new Database(false, true))
-                {
-                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
-                    db.Insert(blockName, sourceDb, true);
-                }
-
-                // 这一步将块参照，即块定义的实例，插入到图纸的指定位置中
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord modelSpace = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
-
-                    // 确保图层存在，不存在则创建
-                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                    if (!lt.Has(targetLayer))
-                    {
-                        lt.UpgradeOpen();
-                        LayerTableRecord newLayer = new LayerTableRecord
-                        {
-                            Name = targetLayer
-                        };
-                        lt.Add(newLayer);
-                        tr.AddNewlyCreatedDBObject(newLayer, true);
-                    }
-
-                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
-                    br.Layer = targetLayer; // 指定插入的图层
-                    modelSpace.AppendEntity(br);
-                    tr.AddNewlyCreatedDBObject(br, true);
-                    tr.Commit();
-                }
-            }
-        }
-
-        [CommandMethod("SM", CommandFlags.Session)]
-        public void InsertShuoMingFromDwg()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\shuoming_test.dwg"; // 
-            string blockName = "dljfaldkf";
-            string targetLayer = "PUB_TEXT";
-            Point3d insertPoint = new Point3d(23827, 13394, 0); // 插入点
-
-            using (DocumentLock docLock = doc.LockDocument())
-            {
-                // 块插入操作应在事务外部
-                // 这一步导入块定义到数据库中
-                using (Database sourceDb = new Database(false, true))
-                {
-                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
-                    db.Insert(blockName, sourceDb, true);
-                }
-
-                // 这一步将块参照，即块定义的实例，插入到图纸的指定位置中
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord modelSpace = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
-
-                    // 确保图层存在，不存在则创建
-                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                    if (!lt.Has(targetLayer))
-                    {
-                        lt.UpgradeOpen();
-                        LayerTableRecord newLayer = new LayerTableRecord
-                        {
-                            Name = targetLayer
-                        };
-                        lt.Add(newLayer);
-                        tr.AddNewlyCreatedDBObject(newLayer, true);
-                    }
-
-                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
-                    br.Layer = targetLayer; // 指定插入的图层
-                    modelSpace.AppendEntity(br);
-                    tr.AddNewlyCreatedDBObject(br, true);
-                    tr.Commit();
-                }
-            }
-        }
-
-        [CommandMethod("ST", CommandFlags.Session)]
-        public void InsertSentenceFromDwg()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\sentence.dwg"; // 
-            string blockName = "Sentence";
-            string targetLayer = "PUB_TEXT";
-            Point3d insertPoint = new Point3d(37268, 28790, 0); // 插入点
-
-            using (DocumentLock docLock = doc.LockDocument())
-            {
-                // 块插入操作应在事务外部
-                // 这一步导入块定义到数据库中
-                using (Database sourceDb = new Database(false, true))
-                {
-                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
-                    db.Insert(blockName, sourceDb, true);
-                }
-
-                // 这一步将块参照，即块定义的实例，插入到图纸的指定位置中
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord modelSpace = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
-
-                    // 确保图层存在，不存在则创建
-                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                    if (!lt.Has(targetLayer))
-                    {
-                        lt.UpgradeOpen();
-                        LayerTableRecord newLayer = new LayerTableRecord
-                        {
-                            Name = targetLayer
-                        };
-                        lt.Add(newLayer);
-                        tr.AddNewlyCreatedDBObject(newLayer, true);
-                    }
-
-                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
-                    br.Layer = targetLayer; // 指定插入的图层
-                    modelSpace.AppendEntity(br);
-                    tr.AddNewlyCreatedDBObject(br, true);
-                    tr.Commit();
-                }
-            }
-        }
-
-        [CommandMethod("WW", CommandFlags.Session)]
-        public void InsertSwitchFromDwg()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\switch.dwg"; // 
-            string blockName = "Switch";
-            string targetLayer = "插座";
-            Point3d insertPoint = new Point3d(20950, 26139, 0); // 插入点
-
-            using (DocumentLock docLock = doc.LockDocument())
-            {
-                // 块插入操作应在事务外部
-                // 这一步导入块定义到数据库中
-                using (Database sourceDb = new Database(false, true))
-                {
-                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
-                    db.Insert(blockName, sourceDb, true);
-                }
-
-                // 这一步将块参照，即块定义的实例，插入到图纸的指定位置中
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord modelSpace = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
-
-                    // 确保图层存在，不存在则创建
-                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                    if (!lt.Has(targetLayer))
-                    {
-                        lt.UpgradeOpen();
-                        LayerTableRecord newLayer = new LayerTableRecord
-                        {
-                            Name = targetLayer
-                        };
-                        lt.Add(newLayer);
-                        tr.AddNewlyCreatedDBObject(newLayer, true);
-                    }
-
-                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
-                    br.Layer = targetLayer; // 指定插入的图层
-                    modelSpace.AppendEntity(br);
-                    tr.AddNewlyCreatedDBObject(br, true);
-                    tr.Commit();
-                }
-            }
-        }
-
-        [CommandMethod("DL", CommandFlags.Session)]
-        public void InsertDLFromDwg()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\donglixiang.dwg"; // 
-            string blockName = "Sentence";
-            string targetLayer = "PUB_TEXT";
-            Point3d insertPoint = new Point3d(21226, 25006, 2); // 插入点
-
-            using (DocumentLock docLock = doc.LockDocument())
-            {
-                // 块插入操作应在事务外部
-                // 这一步导入块定义到数据库中
-                using (Database sourceDb = new Database(false, true))
-                {
-                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
-                    db.Insert(blockName, sourceDb, true);
-                }
-
-                // 这一步将块参照，即块定义的实例，插入到图纸的指定位置中
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord modelSpace = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
-
-                    // 确保图层存在，不存在则创建
-                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                    if (!lt.Has(targetLayer))
-                    {
-                        lt.UpgradeOpen();
-                        LayerTableRecord newLayer = new LayerTableRecord
-                        {
-                            Name = targetLayer
-                        };
-                        lt.Add(newLayer);
-                        tr.AddNewlyCreatedDBObject(newLayer, true);
-                    }
-
-                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
-                    br.Layer = targetLayer; // 指定插入的图层
-                    modelSpace.AppendEntity(br);
-                    tr.AddNewlyCreatedDBObject(br, true);
-                    tr.Commit();
-                }
-            }
-        }
         [CommandMethod("PRINT_ALL_BLOCK_NAMES", CommandFlags.Session)]
         public void PrintAllBlockNames()
         {
@@ -963,12 +275,221 @@ namespace CoDesignStudy.Cad.PlugIn
                 tr.Commit();
             }
         }
-        [CommandMethod("DELETE_LAYER_AND_ENTS", CommandFlags.Session)]
-        public void DeleteLayerAndEntities(string layerName)
+        private static Point3d GetCenterFromExtents(Extents3d ext)
+        {
+            double centerX = (ext.MinPoint.X + ext.MaxPoint.X) / 2.0;
+            double centerY = (ext.MinPoint.Y + ext.MaxPoint.Y) / 2.0;
+            double centerZ = (ext.MinPoint.Z + ext.MaxPoint.Z) / 2.0;
+            return new Point3d(centerX, centerY, centerZ);
+        }
+        public class AnalysisResult
+        {
+            public Dictionary<string, List<double[]>> Blocks { get; set; } = new Dictionary<string, List<double[]>>();
+            public Dictionary<string, int> BlockCount { get; set; } = new Dictionary<string, int>();
+            public Dictionary<string, double> PolylineLengthByLayer { get; set; } = new Dictionary<string, double>();
+            public List<object> Texts { get; set; } = new List<object>();
+            public List<double[]> RectPoints { get; set; } = new List<double[]>();
+        }
+
+        [CommandMethod("SELECT_RECT_PRINT", CommandFlags.Session)]
+        public void SelectEntitiesByRectangleAndPrintInfo()
         {
             Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
             Editor ed = doc.Editor;
+            Database db = doc.Database;
+
+            HashSet<string> keepLayers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "COLUMN",
+                "PUB_HATCH",
+                "PUB_TEXT",
+                "STAIR",
+                "WALL",
+                "WINDOW",
+                "WINDOW_TEXT",
+                "0"
+            };
+
+            // 1. 让用户用鼠标框选一个矩形
+            PromptPointResult ppr1 = ed.GetPoint("\n请指定矩形的第一个角点: ");
+            if (ppr1.Status != PromptStatus.OK) return;
+            PromptCornerOptions pco = new PromptCornerOptions("\n请指定对角点: ", ppr1.Value);
+            PromptPointResult ppr2 = ed.GetCorner(pco);
+            if (ppr2.Status != PromptStatus.OK) return;
+
+            Point3d pt1 = ppr1.Value;
+            Point3d pt2 = ppr2.Value;
+
+            // 2. 计算矩形范围
+            double minX = Math.Min(pt1.X, pt2.X);
+            double minY = Math.Min(pt1.Y, pt2.Y);
+            double maxX = Math.Max(pt1.X, pt2.X);
+            double maxY = Math.Max(pt1.Y, pt2.Y);
+            Extents3d rect = new Extents3d(new Point3d(minX, minY, 0), new Point3d(maxX, maxY, 0));
+
+            var result = new AnalysisResult();
+
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+
+                int count = 0;
+                foreach (ObjectId id in modelSpace)
+                {
+                    Entity ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
+                    if (ent == null) continue;
+                    if (ent is Line line) continue;
+
+                    // 只处理在 keepLayers 中的图层
+                    if (!keepLayers.Contains(ent.Layer))
+                        continue;
+
+                    // 判断实体是否有几何范围
+                    try
+                    {
+                        Extents3d ext = ent.GeometricExtents;
+                        // 判断实体范围与矩形是否相交
+                        if (ext.MinPoint.X < minX || ext.MaxPoint.X > maxX ||
+                            ext.MinPoint.Y < minY || ext.MaxPoint.Y > maxY)
+                        {
+                            continue;
+                        }
+                    }
+                    catch
+                    {
+                        continue; // 某些实体可能没有几何范围
+                    }
+
+                    count++;
+                    ent.Highlight();
+                    if (ent is BlockReference br)
+                    {
+                        string blockName = "";
+                        if (br.BlockTableRecord.IsValid)
+                        {
+                            BlockTableRecord brDef = (BlockTableRecord)tr.GetObject(br.BlockTableRecord, OpenMode.ForRead);
+                            blockName = brDef.Name;
+                        }
+                        // 统计数量
+                        if (!result.BlockCount.ContainsKey(blockName))
+                            result.BlockCount[blockName] = 0;
+                        result.BlockCount[blockName]++;
+                        // 记录中心坐标
+                        if (!result.Blocks.ContainsKey(blockName))
+                            result.Blocks[blockName] = new List<double[]>();
+                        try
+                        {
+                            var center = GetCenterFromExtents(br.GeometricExtents);
+                            result.Blocks[blockName].Add(new double[] { center.X, center.Y, center.Z });
+                        }
+                        catch { }
+                        ed.WriteMessage($"\n类型: BlockReference, 块名: {blockName}, 插入点: {br.Position}, 对象ID: {ent.ObjectId}");
+                    }
+                    else if (ent is Hatch hatch)
+                    {
+                        if (hatch.Layer.Equals("PUB_HATCH", StringComparison.OrdinalIgnoreCase))
+                        {
+                            string blockName = "_FZH";
+                            if (!result.BlockCount.ContainsKey(blockName))
+                                result.BlockCount[blockName] = 0;
+                            result.BlockCount[blockName]++;
+
+                            if (!result.Blocks.ContainsKey(blockName))
+                                result.Blocks[blockName] = new List<double[]>();
+                            try
+                            {
+                                var center = GetCenterFromExtents(hatch.GeometricExtents);
+                                result.Blocks[blockName].Add(new double[] { center.X, center.Y, center.Z });
+                            }
+                            catch { }
+                        }
+                    }
+                    else if (ent is DBText dBText)
+                    {
+                        result.Texts.Add(new
+                        {
+                            content = dBText.TextString,
+                            position = new double[] { dBText.Position.X, dBText.Position.Y, dBText.Position.Z }
+                        });
+                        ed.WriteMessage($"\n类型: DBText, 内容: \"{dBText.TextString}\", 位置: {dBText.Position}, 对象ID: {ent.ObjectId}");
+                    }
+                    else if (ent is Polyline polyline)
+                    {
+                        string layerName = polyline.Layer;
+                        if (!result.PolylineLengthByLayer.ContainsKey(layerName))
+                            result.PolylineLengthByLayer[layerName] = 0;
+                        result.PolylineLengthByLayer[layerName] += polyline.Length;
+
+                        ed.WriteMessage($"\n类型: Polyline, 图层: {layerName}, 长度: {polyline.Length}, 对象ID: {ent.ObjectId}");
+                    }
+                    else
+                    {
+                        ed.WriteMessage($"\n类型: {ent.GetType().Name}, 基点: {ent.GeometricExtents.MinPoint}, 对象ID: {ent.ObjectId}");
+                    }
+                }
+                ed.WriteMessage($"\n共选中 {count} 个图元。");
+                tr.Commit();
+            }
+            if (result.Blocks.ContainsKey("_FZH"))
+            {
+                var rectPoints = BoundingRectangle.Program
+                .CalculateBoundingRectangle(result.Blocks["_FZH"])
+                .Select(p => new double[] { p.X, p.Y }).ToList();
+
+                //using (Transaction tr = db.TransactionManager.StartTransaction())
+                //{
+                //    var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                //    var modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+                //    for (int i = 0; i < 4; i++)
+                //    {
+                //        var start = result.RectPoints[i];
+                //        var end = result.RectPoints[(i + 1) % 4];
+                //        var line = new Line(
+                //            new Point3d(start[0], start[1], 0),
+                //            new Point3d(end[0], end[1], 0)
+                //        );
+                //        line.ColorIndex = 3;
+                //        modelSpace.AppendEntity(line);
+                //        tr.AddNewlyCreatedDBObject(line, true);
+                //    }
+
+                //    tr.Commit();
+                //}
+                result.RectPoints = rectPoints;
+            }
+
+            // 输出结构化JSON
+            string json = Newtonsoft.Json.JsonConvert.SerializeObject(result, Newtonsoft.Json.Formatting.Indented);
+            ed.WriteMessage($"\n{json}");
+
+            // 导出到文件
+            try
+            {
+                string filePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "cad_rect_result.json");
+                File.WriteAllText(filePath, json, System.Text.Encoding.UTF8);
+                ed.WriteMessage($"\n已导出到: {filePath}");
+            }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage($"\n导出JSON文件失败: {ex.Message}");
+            }
+        }
+
+        [CommandMethod("DELETE_LAYER_AND_ENTITY", CommandFlags.Session)]
+        public void DeleteLayerAndEntity()
+        {
+            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
+            Editor ed = doc.Editor;
+            Database db = doc.Database;
+
+            // 提示用户输入图层名
+            PromptStringOptions pso = new PromptStringOptions("\n请输入要删除的图层名: ");
+            pso.AllowSpaces = true;
+            PromptResult pr = ed.GetString(pso);
+            if (pr.Status != PromptStatus.OK) return;
+            string layerName = pr.StringResult.Trim();
 
             using (DocumentLock docLock = doc.LockDocument())
             using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -1018,141 +539,77 @@ namespace CoDesignStudy.Cad.PlugIn
                 ed.WriteMessage($"\n图层 \"{layerName}\" 及其所有实体已删除。");
             }
         }
-        private static Point3d GetCenterFromExtents(Extents3d ext)
-        {
-            double centerX = (ext.MinPoint.X + ext.MaxPoint.X) / 2.0;
-            double centerY = (ext.MinPoint.Y + ext.MaxPoint.Y) / 2.0;
-            double centerZ = (ext.MinPoint.Z + ext.MaxPoint.Z) / 2.0;
-            return new Point3d(centerX, centerY, centerZ);
-        }
-        [CommandMethod("SELECT_RECT_PRINT", CommandFlags.Session)]
-        public void SelectEntitiesByRectangleAndPrintInfo()
+        [CommandMethod("DELETE_EXCEPT_LAYERS", CommandFlags.Session)]
+        public void DeleteExceptLayers()
         {
             Document doc = CADApplication.DocumentManager.MdiActiveDocument;
             Editor ed = doc.Editor;
             Database db = doc.Database;
 
-            // 1. 让用户用鼠标框选一个矩形
-            PromptPointResult ppr1 = ed.GetPoint("\n请指定矩形的第一个角点: ");
-            if (ppr1.Status != PromptStatus.OK) return;
-            PromptCornerOptions pco = new PromptCornerOptions("\n请指定对角点: ", ppr1.Value);
-            PromptPointResult ppr2 = ed.GetCorner(pco);
-            if (ppr2.Status != PromptStatus.OK) return;
-
-            Point3d pt1 = ppr1.Value;
-            Point3d pt2 = ppr2.Value;
-
-            // 2. 计算矩形范围
-            double minX = Math.Min(pt1.X, pt2.X);
-            double minY = Math.Min(pt1.Y, pt2.Y);
-            double maxX = Math.Max(pt1.X, pt2.X);
-            double maxY = Math.Max(pt1.Y, pt2.Y);
-            Extents3d rect = new Extents3d(new Point3d(minX, minY, 0), new Point3d(maxX, maxY, 0));
-
-            var result = new
+            // 需要保留的图层名（全部大写，便于比较）
+            HashSet<string> keepLayers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                blocks = new Dictionary<string, List<double[]>>(), // 块名 -> List<中心坐标[x,y,z]>
-                blockCount = new Dictionary<string, int>(),         // 块名 -> 数量
-                polylineLengthByLayer = new Dictionary<string, double>(),       // 图层名 -> 总长度
-                texts = new List<object>()                          // { 内容, 位置[x,y,z] }
+                "COLUMN",
+                "PUB_HATCH",
+                "PUB_TEXT",
+                "STAIR",
+                "WALL",
+                "WINDOW",
+                "WINDOW_TEXT",
+                "0",           // 通常建议保留0层
+                "DEFPOINTS"    // 通常建议保留Defpoints层
             };
 
+            using (DocumentLock docLock = doc.LockDocument())
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
-                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                List<string> toDelete = new List<string>();
 
-                int count = 0;
-                foreach (ObjectId id in modelSpace)
+                // 收集要删除的图层名
+                foreach (ObjectId layerId in lt)
                 {
-                    Entity ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                    if (ent == null) continue;
-                    if (ent is Line line) continue;
-                    
-                    // 判断实体是否有几何范围
-                    try
+                    LayerTableRecord ltr = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForRead);
+                    string lname = ltr.Name;
+                    if (!keepLayers.Contains(lname) && !ltr.IsDependent && !ltr.IsErased && db.Clayer != ltr.ObjectId)
                     {
-                        Extents3d ext = ent.GeometricExtents;
-                        // 判断实体范围与矩形是否相交
-                        if (ext.MinPoint.X < minX || ext.MaxPoint.X > maxX ||
-                            ext.MinPoint.Y < minY || ext.MaxPoint.Y > maxY)
-                        {
-                            continue;
-                        }
-                    }
-                    catch
-                    {
-                        continue; // 某些实体可能没有几何范围
-                    }
-
-                    count++;
-                    ent.Highlight();
-                    if (ent is BlockReference br)
-                    {
-                        string blockName = "";
-                        if (br.BlockTableRecord.IsValid)
-                        {
-                            BlockTableRecord brDef = (BlockTableRecord)tr.GetObject(br.BlockTableRecord, OpenMode.ForRead);
-                            blockName = brDef.Name;
-                        }
-                        // 统计数量
-                        if (!result.blockCount.ContainsKey(blockName))
-                            result.blockCount[blockName] = 0;
-                        result.blockCount[blockName]++;
-                        // 记录中心坐标
-                        if (!result.blocks.ContainsKey(blockName))
-                            result.blocks[blockName] = new List<double[]>();
-                        try
-                        {
-                            var center = GetCenterFromExtents(br.GeometricExtents);
-                            result.blocks[blockName].Add(new double[] { center.X, center.Y, center.Z });
-                        }
-                        catch { }
-                        ed.WriteMessage($"\n类型: BlockReference, 块名: {blockName}, 插入点: {br.Position}, 对象ID: {ent.ObjectId}");
-                    }
-                    else if (ent is DBText dBText)
-                    {
-                        result.texts.Add(new
-                        {
-                            content = dBText.TextString,
-                            position = new double[] { dBText.Position.X, dBText.Position.Y, dBText.Position.Z }
-                        });
-                        ed.WriteMessage($"\n类型: DBText, 内容: \"{dBText.TextString}\", 位置: {dBText.Position}, 对象ID: {ent.ObjectId}");
-                    }
-                    else if (ent is Polyline polyline)
-                    {
-                        string layerName = polyline.Layer;
-                        if (!result.polylineLengthByLayer.ContainsKey(layerName))
-                            result.polylineLengthByLayer[layerName] = 0;
-                        result.polylineLengthByLayer[layerName] += polyline.Length;
-
-                        ed.WriteMessage($"\n类型: Polyline, 图层: {layerName}, 长度: {polyline.Length}, 对象ID: {ent.ObjectId}");
-                    }
-                    else
-                    {
-                        ed.WriteMessage($"\n类型: {ent.GetType().Name}, 基点: {ent.GeometricExtents.MinPoint}, 对象ID: {ent.ObjectId}");
+                        toDelete.Add(lname);
                     }
                 }
-                ed.WriteMessage($"\n共选中 {count} 个图元。");
+
+                // 删除每个图层上的实体和图层本身
+                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                foreach (string layerName in toDelete)
+                {
+                    // 删除实体
+                    foreach (ObjectId btrId in bt)
+                    {
+                        BlockTableRecord btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForWrite);
+                        List<ObjectId> toErase = new List<ObjectId>();
+                        foreach (ObjectId entId in btr)
+                        {
+                            Entity ent = tr.GetObject(entId, OpenMode.ForRead) as Entity;
+                            if (ent != null && ent.Layer.Equals(layerName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                toErase.Add(entId);
+                            }
+                        }
+                        foreach (ObjectId entId in toErase)
+                        {
+                            Entity ent = tr.GetObject(entId, OpenMode.ForWrite) as Entity;
+                            ent.Erase();
+                        }
+                    }
+                    // 删除图层
+                    LayerTableRecord ltr = (LayerTableRecord)tr.GetObject(lt[layerName], OpenMode.ForWrite);
+                    ltr.Erase();
+                    ed.WriteMessage($"\n已删除图层及其实体: {layerName}");
+                }
+
                 tr.Commit();
-            }
-
-            // 输出结构化JSON
-            string json = Newtonsoft.Json.JsonConvert.SerializeObject(result, Newtonsoft.Json.Formatting.Indented);
-            ed.WriteMessage($"\n{json}");
-
-            // 导出到文件
-            try
-            {
-                string filePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "cad_rect_result.json");
-                File.WriteAllText(filePath, json, System.Text.Encoding.UTF8);
-                ed.WriteMessage($"\n已导出到: {filePath}");
-            }
-            catch (System.Exception ex)
-            {
-                ed.WriteMessage($"\n导出JSON文件失败: {ex.Message}");
+                ed.WriteMessage($"\n操作完成，已保留指定图层，其余图层及实体全部删除。");
             }
         }
         #endregion
     }
-}
+    }
