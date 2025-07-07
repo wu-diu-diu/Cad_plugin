@@ -143,7 +143,11 @@
       <SubType>UserControl</SubType>
     </Compile>
     <Compile Include="Command.cs" />
+    <Compile Include="Prompt.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="WebService.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />

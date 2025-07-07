@@ -1,4 +1,11 @@
-﻿using DeepSeek.Sdk;
+﻿using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.DatabaseServices;
+using Autodesk.AutoCAD.EditorInput;
+using Autodesk.AutoCAD.Geometry;
+using DeepSeek.Sdk;
+using Markdig;  // 支持Markdown语法
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms; 
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -6,14 +13,8 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using Markdig;  // 支持Markdown语法
-using Microsoft.Web.WebView2.WinForms; 
-using Microsoft.Web.WebView2.Core;
-using Autodesk.AutoCAD.ApplicationServices;
 //using Autodesk.AutoCAD.Runtime;
 using CADApplication = Autodesk.AutoCAD.ApplicationServices.Application;
-using Autodesk.AutoCAD.DatabaseServices;
-using Autodesk.AutoCAD.EditorInput;
 
 namespace CoDesignStudy.Cad.PlugIn
 {
@@ -74,8 +75,6 @@ namespace CoDesignStudy.Cad.PlugIn
             this.Controls.Add(inputPanel);
         }
 
-       
-
         private async void SendButton_Click(object sender, EventArgs e)
         {
             if (string.IsNullOrWhiteSpace(inputTextBox.Text))
@@ -87,13 +86,89 @@ namespace CoDesignStudy.Cad.PlugIn
             await AppendMessageAsync("用户", userMessage);
 
             sendButton.Enabled = false;
+            if (userMessage == "请帮我绘制当前图纸的照明系统")
+            {
+
+                await Task.Delay(5000);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("BB ", true, false, false);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("AA ", true, false, false);
+                var promptInstance = new Prompt();
+                userMessage = promptInstance.TuZhiShiBie();
+            }
+            if (userMessage == "是的")
+            {
+                Action<string> updateFunc = null;
+                var aiContentControl = await AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
+
+                userMessage = Prompt.CADPrompt2;
+                await GetAIResponse(userMessage, updateFunc);
+                await Task.Delay(3000);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("ZZ ", true, false, false);
+                await Task.Delay(3000);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("LL ", true, false, false);
+                await Task.Delay(3000);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("YY ", true, false, false);
+                await Task.Delay(3000);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("CC ", true, false, false);
+
+
+                userMessage = Prompt.CADPrompt3;
+                await GetAIResponse(userMessage, updateFunc);
+                await Task.Delay(5000);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("ZL ", true, false, false);
+                await Task.Delay(4000);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("YL ", true, false, false);
+                await Task.Delay(4000);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("CL ", true, false, false);
+                await Task.Delay(4000);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("WW ", true, false, false);
+
+
+                userMessage = Prompt.CADPrompt4;
+                await GetAIResponse(userMessage, updateFunc);
+                await Task.Delay(3000);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("ZS ", true, false, false);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("EE ", true, false, false);
+                await Task.Delay(3000);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("TL ", true, false, false);
+                await Task.Delay(3000);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("SM ", true, false, false);
+                await Task.Delay(3000);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("ST ", true, false, false);
+                CADApplication.DocumentManager.MdiActiveDocument.SendStringToExecute("DL ", true, false, false);
+
+                userMessage = Prompt.CADPrompt5;
+                await GetAIResponse(userMessage, updateFunc);
+                await Task.Delay(3000);
+                //var promptInstance = new Prompt();
+                //userMessage = promptInstance.TuZhiJiaoYan();
+                //await GetAIResponse(userMessage, updateFunc);
+                return;
+            }
+            if (userMessage == "有两个错误，应急灯具和照明灯具绘制在同一图层，吸顶灯安装高度不对")
+            {
+                Action<string> updateFunc = null;
+                var aiContentControl = await AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
+                var promptInstance = new Prompt();
+                userMessage = promptInstance.TuZhiXiuGai();
+                await GetAIResponse(userMessage, updateFunc);
+                await Task.Delay(3000);
+                DeleteBlockReferencesByName("ZhaoMing-Yinji");
+                DeleteBlockReferencesByName("ZhaoMing-Text-error");
+                await Task.Delay(3000);
+                InsertBlockFromDwg("ZhaoMing-Text-Right", @"C:\Users\武丢丢\Documents\zhaoming-text-right.dwg", "照明", new Point3d(18635, 23173, 1));
+                InsertBlockFromDwg("ZhaoMing-Yinji", @"C:\Users\武丢丢\Documents\yinji-new.dwg", "EQUIP-应急", new Point3d(15772, 25615, 2));
+                await Task.Delay(1000);
+                userMessage = Prompt.CADPrompt9;
+                await GetAIResponse(userMessage, updateFunc);
+                return;
+            }
+
             try
             {
                 Action<string> updateFunc = null;
-
                 // 等待 AI 控件初始化并获得更新函数
                 var aiContentControl = await AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
-
                 await GetAIResponse(userMessage, updateFunc);
             }
             finally
@@ -126,45 +201,44 @@ namespace CoDesignStudy.Cad.PlugIn
                     {
                         if (int.TryParse(a.WebMessageAsJson, out int height))
                         {
-                            int adjustedHeight = height;
+                            Action update = () =>
+                            {
+                                webView.Height = Math.Max(height, 1);
+                                // ⭐ 关键：更新高度后再滚动
+                                conversationPanel.ScrollControlIntoView(webView);
+                            };
+
                             if (webView.InvokeRequired)
-                            {
-                                webView.Invoke(new Action(() =>
-                                {
-                                    webView.Height = Math.Max(adjustedHeight, 1);
-                                }));
-                            }
+                                webView.Invoke(update);
                             else
-                            {
-                                webView.Height = Math.Max(adjustedHeight, 1);
-                            }
+                                update();
                         }
                     };
 
                     string html = Markdig.Markdown.ToHtml(message ?? "");
-                    string doc = $"<html><body id='body' style='font-family:微软雅黑;font-size:10pt;background-color:#FFFFFF;margin:0;padding:0;'>{html}<script>function setContent(html){{const body = document.getElementById('body'); body.innerHTML=html; setTimeout(() => {{ const height = Math.max(body.scrollHeight, document.documentElement.scrollHeight); window.chrome.webview.postMessage(height); }}, 0);}} const initialHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight); window.chrome.webview.postMessage(initialHeight);</script></body></html>";
+                    string doc = $"<html><head><script>window.MathJax={{tex:{{inlineMath:[['$','$'],['\\\\(','\\\\)']],displayMath:[['$$','$$'],['\\\\[','\\\\]']]}},svg:{{fontCache:'global'}}}};</script><script src='https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js'></script></head><body id='body' style='font-family:微软雅黑;font-size:10pt;background-color:#FFFFFF;margin:0;padding:0;'>{html}<script>function setContent(html){{const body=document.getElementById('body');body.innerHTML=html;if(window.MathJax){{MathJax.typesetPromise([body]).then(()=>{{setTimeout(()=>{{const height=Math.max(body.scrollHeight,document.documentElement.scrollHeight);window.chrome.webview.postMessage(height);}},100);}});}}else{{setTimeout(()=>{{const height=Math.max(body.scrollHeight,document.documentElement.scrollHeight);window.chrome.webview.postMessage(height);}},100);}}const resizeObserver=new ResizeObserver(()=>{{const newHeight=Math.max(body.scrollHeight,document.documentElement.scrollHeight);window.chrome.webview.postMessage(newHeight);}});resizeObserver.observe(body);}}if(window.MathJax)MathJax.typesetPromise();const initialHeight=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);window.chrome.webview.postMessage(initialHeight);</script></body></html>";
                     webView.CoreWebView2.NavigateToString(doc);
 
                     if (setUpdateContent != null)
                     {
                         Action<string> updateContent = (newContent) =>
                         {
+                            string htmlUpdate = Markdig.Markdown.ToHtml(newContent).Replace("`", "\\`");
+
                             if (webView.InvokeRequired)
                             {
                                 webView.Invoke(new Action(() =>
                                 {
-                                    string htmlUpdate = Markdig.Markdown.ToHtml(newContent).Replace("`", "\\`");
                                     webView.CoreWebView2.ExecuteScriptAsync($"setContent(`{htmlUpdate}`);");
-                                    // 滚动到底部
                                     conversationPanel.ScrollControlIntoView(webView);
+                                    // ❌ 不在这里滚动
                                 }));
                             }
                             else
                             {
-                                string htmlUpdate = Markdig.Markdown.ToHtml(newContent).Replace("`", "\\`");
                                 webView.CoreWebView2.ExecuteScriptAsync($"setContent(`{htmlUpdate}`);");
-                                // 滚动到底部
                                 conversationPanel.ScrollControlIntoView(webView);
+                                // ❌ 不在这里滚动
                             }
                         };
 
@@ -210,7 +284,7 @@ namespace CoDesignStudy.Cad.PlugIn
 
             horizontalPanel.Controls.Add(avatar);
             horizontalPanel.Controls.Add(contentControl);
-
+            // TODO: 鼠标滚动只能在侧边栏的最右侧实现，可能是因为ai回复消息的气泡的控件不支持鼠标滚动
             var container = new FlowLayoutPanel
             {
                 AutoSize = true,                       // ✅ 必须，确保高度自适应
@@ -327,6 +401,89 @@ namespace CoDesignStudy.Cad.PlugIn
                             lbl.MaximumSize = new Size(conversationPanel.Width - 100, 0);
                         }
                     }
+                }
+            }
+        }
+        public void DeleteBlockReferencesByName(string blockName)
+        {
+            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+
+            using (DocumentLock docLock = doc.LockDocument())
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+                List<ObjectId> toErase = new List<ObjectId>();
+
+                foreach (ObjectId id in modelSpace)
+                {
+                    Entity ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
+                    if (ent is BlockReference br)
+                    {
+                        BlockTableRecord brDef = (BlockTableRecord)tr.GetObject(br.BlockTableRecord, OpenMode.ForRead);
+                        if (brDef.Name == blockName)
+                        {
+                            toErase.Add(id);
+                        }
+                    }
+                }
+
+                foreach (ObjectId id in toErase)
+                {
+                    Entity ent = tr.GetObject(id, OpenMode.ForWrite) as Entity;
+                    ent.Erase();
+                }
+
+                tr.Commit();
+            }
+        }
+        /// <summary>
+        /// 从指定DWG文件插入块参照到当前图纸，并确保目标图层存在。
+        /// </summary>
+        /// <param name="blockName">块定义名称，如 "ZhaoMing-Text-error"</param>
+        /// <param name="dwgFilePath">块定义DWG文件路径，如 @"C:\Users\xxx\Documents\xxx.dwg"</param>
+        /// <param name="targetLayer">插入块参照的目标图层名，如 "照明"</param>
+        /// <param name="insertPoint">插入点坐标，如 new Point3d(18635, 23173, 1)</param>
+        public void InsertBlockFromDwg(string blockName, string dwgFilePath, string targetLayer, Point3d insertPoint)
+        {
+            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+
+            using (DocumentLock docLock = doc.LockDocument())
+            {
+                // 块插入操作应在事务外部
+                using (Database sourceDb = new Database(false, true))
+                {
+                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
+                    db.Insert(blockName, sourceDb, true);
+                }
+
+                // 这一步将块参照，即块定义的实例，插入到图纸的指定位置中
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                    BlockTableRecord modelSpace = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
+
+                    // 确保图层存在，不存在则创建
+                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                    if (!lt.Has(targetLayer))
+                    {
+                        lt.UpgradeOpen();
+                        LayerTableRecord newLayer = new LayerTableRecord
+                        {
+                            Name = targetLayer
+                        };
+                        lt.Add(newLayer);
+                        tr.AddNewlyCreatedDBObject(newLayer, true);
+                    }
+
+                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
+                    br.Layer = targetLayer; // 指定插入的图层
+                    modelSpace.AppendEntity(br);
+                    tr.AddNewlyCreatedDBObject(br, true);
+                    tr.Commit();
                 }
             }
         }
