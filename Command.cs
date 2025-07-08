@@ -407,12 +407,18 @@ namespace CoDesignStudy.Cad.PlugIn
                     }
                     else if (ent is DBText dBText)
                     {
+                        string content = dBText.TextString?.Trim(); // 去掉首尾空格，防止因空格导致匹配失败
+
+                        if (!string.IsNullOrEmpty(content) &&
+                            (content.EndsWith("室") || content.EndsWith("间")))
+                        {
                         result.Texts.Add(new
                         {
-                            content = dBText.TextString,
+                                content = content,
                             position = new double[] { dBText.Position.X, dBText.Position.Y, dBText.Position.Z }
                         });
-                        ed.WriteMessage($"\n类型: DBText, 内容: \"{dBText.TextString}\", 位置: {dBText.Position}, 对象ID: {ent.ObjectId}");
+                            ed.WriteMessage($"\n类型: DBText, 内容: \"{content}\", 位置: {dBText.Position}, 对象ID: {ent.ObjectId}");
+                    }
                     }
                     else if (ent is Polyline polyline)
                     {
@@ -436,29 +442,37 @@ namespace CoDesignStudy.Cad.PlugIn
                 var rectPoints = BoundingRectangle.Program
                 .CalculateBoundingRectangle(result.Blocks["_FZH"])
                 .Select(p => new double[] { p.X, p.Y }).ToList();
-
-                //using (Transaction tr = db.TransactionManager.StartTransaction())
-                //{
-                //    var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                //    var modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
-
-                //    for (int i = 0; i < 4; i++)
-                //    {
-                //        var start = result.RectPoints[i];
-                //        var end = result.RectPoints[(i + 1) % 4];
-                //        var line = new Line(
-                //            new Point3d(start[0], start[1], 0),
-                //            new Point3d(end[0], end[1], 0)
-                //        );
-                //        line.ColorIndex = 3;
-                //        modelSpace.AppendEntity(line);
-                //        tr.AddNewlyCreatedDBObject(line, true);
-                //    }
-
-                //    tr.Commit();
-                //}
                 result.RectPoints = rectPoints;
             }
+            var intRectPoints = result.RectPoints
+                .Select(pt => pt.Select(x => (int)x).ToArray())
+                .ToList();
+            // 转为字符串（如 [[32267, 52942], [41142, 52942], ...]）
+            string coordinatesStr = "[" + string.Join(", ", intRectPoints.Select(
+                                        pt => $"[{string.Join(", ", pt)}]"
+                                    )) + "]";
+
+            var textObj = result.Texts[0];
+            // 反射或 dynamic 获取 content 字段
+            string roomType = "";
+            var prop = textObj.GetType().GetProperty("content");
+            if (prop != null)
+                roomType = prop.GetValue(textObj)?.ToString();
+            string CaculatePromptTemplate = Prompt.CaculatePrompt;
+            // 生成完整Prompt
+            FinalPrompt = string.Format(CaculatePromptTemplate, roomType, coordinatesStr);
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await SelectEntitiesByRectangleAndPrintInfoAsync();
+                }
+                catch (System.Exception ex)
+                {
+                    Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.Editor.WriteMessage($"\n错误: {ex.Message}");
+            }
+            });
 
             // 输出结构化JSON
             string json = Newtonsoft.Json.JsonConvert.SerializeObject(result, Newtonsoft.Json.Formatting.Indented);
@@ -475,6 +489,14 @@ namespace CoDesignStudy.Cad.PlugIn
             {
                 ed.WriteMessage($"\n导出JSON文件失败: {ex.Message}");
             }
+        }
+        private async Task SelectEntitiesByRectangleAndPrintInfoAsync()
+        {
+            PaletteSetDlg dlg = new PaletteSetDlg();
+            Action<string> updateFunc = null;
+            // 等待 AI 控件初始化并获得更新函数
+            var aiContentControl = await dlg.AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
+            await dlg.GetAIResponse(FinalPrompt, updateFunc);
         }
 
         [CommandMethod("DELETE_LAYER_AND_ENTITY", CommandFlags.Session)]
