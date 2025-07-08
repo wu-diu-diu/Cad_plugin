@@ -523,6 +523,7 @@ namespace CoDesignStudy.Cad.PlugIn
             string ModelReplyJson = match.Groups[1].Value;
             var obj = JsonConvert.DeserializeObject<LightingDesignResponse>(ModelReplyJson);
 
+            // 提取坐标点
             List<Point3d> insertPoints = new List<Point3d>();
 
             foreach (var fixture in obj.lighting_design.fixture_positions_mm)
@@ -536,12 +537,13 @@ namespace CoDesignStudy.Cad.PlugIn
                     insertPoints.Add(new Point3d(x, y, z));
                 }
             }
-            string targetLayer = "AI"; // 或者你自己的目标图层名
+            string targetLayer = "照明"; // 或者你自己的目标图层名
 
             foreach (var pt in insertPoints)
             {
                 InsertBlockFromDwg(pt, targetLayer);
             }
+            DrawClosedPolyline(insertPoints, "照明-WIRE");
             //int GenLightCount = obj.lighting_design.fixture_count;
             //List<> GenLightPositions = obj.lighting_design.fixture_positions_mm;
 
@@ -550,6 +552,7 @@ namespace CoDesignStudy.Cad.PlugIn
             ed.WriteMessage($"\n{json}");
             ed.WriteMessage($"\n灯具类型：{obj.lighting_design.fixture_type}");
             ed.WriteMessage($"\n灯具数量：{obj.lighting_design.fixture_count}");
+            ed.WriteMessage($"\n灯具坐标：{obj.lighting_design.fixture_positions_mm}");
 
             // 导出到文件
             try
@@ -606,6 +609,94 @@ namespace CoDesignStudy.Cad.PlugIn
                 }
             }
         }
+
+        public static List<Point3d> SortPointsToClosedLoop(List<Point3d> inputPoints)
+        {
+            if (inputPoints == null || inputPoints.Count == 0)
+                return new List<Point3d>();
+
+            List<Point3d> sorted = new List<Point3d>();
+            HashSet<int> visited = new HashSet<int>();
+
+            Point3d current = inputPoints[0];
+            sorted.Add(current);
+            visited.Add(0);
+
+            while (visited.Count < inputPoints.Count)
+            {
+                double minDist = double.MaxValue;
+                int nearestIndex = -1;
+
+                for (int i = 0; i < inputPoints.Count; i++)
+                {
+                    if (visited.Contains(i)) continue;
+
+                    double dist = current.DistanceTo(inputPoints[i]);
+                    if (dist < minDist)
+                    {
+                        minDist = dist;
+                        nearestIndex = i;
+                    }
+                }
+
+                if (nearestIndex != -1)
+                {
+                    current = inputPoints[nearestIndex];
+                    sorted.Add(current);
+                    visited.Add(nearestIndex);
+                }
+            }
+
+            // 闭合回原点
+            sorted.Add(sorted[0]);
+
+            return sorted;
+        }
+
+        public void DrawClosedPolyline(List<Point3d> lampPoints, string layerName)
+        {
+            var sortedPoints = SortPointsToClosedLoop(lampPoints);
+
+            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+
+            using (DocumentLock docLock = doc.LockDocument())
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                // 创建图层（如果不存在）
+                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                if (!lt.Has(layerName))
+                {
+                    lt.UpgradeOpen();
+                    LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
+                    lt.Add(newLayer);
+                    tr.AddNewlyCreatedDBObject(newLayer, true);
+                }
+
+                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                BlockTableRecord btr = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+                Polyline poly = new Polyline();
+                for (int i = 0; i < sortedPoints.Count; i++)
+                {
+                    poly.AddVertexAt(i, new Point2d(sortedPoints[i].X, sortedPoints[i].Y), 0, 0, 0);
+                }
+
+                poly.Closed = true;  // ✅ 关闭曲线
+
+                poly.Layer = layerName;
+
+                poly.Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 153);
+                poly.ConstantWidth = 1.0f;
+
+                btr.AppendEntity(poly);
+                tr.AddNewlyCreatedDBObject(poly, true);
+
+                tr.Commit();
+            }
+        }
+
+
         private async Task SelectEntitiesByRectangleAndPrintInfoAsync(string prompt, PaletteSetDlg dlg)
         {
             Action<string> updateFunc = null;
