@@ -207,6 +207,33 @@ namespace CoDesignStudy.Cad.PlugIn
    - ✅ 处理措施：已将所有吸顶灯的安装高度调整为 **4.5 米**（参考《建筑照明设计标准》GB 50034-2013）。
 
 🛠️ 正在进行图纸修改，，，";
+        public static readonly string CaculatePrompt = @"你是建筑照明设计领域的专家，现在请你根据给定房间的角点坐标和房间类型，生成符合下列 JSON 结构的灯具布置建议。
+
+请严格按照以下 JSON 格式返回结果，并且确保“必要字段”一定包含在输出中。
+
+【必要字段】包括：
+- room_info.room_type
+- room_info.coordinates_mm
+- room_info.dimensions（包括 length_mm, width_mm, area_m2）
+- room_info.illuminance_standard_lx
+- lighting_design.fixture_type
+- lighting_design.fixture_count
+- lighting_design.fixture_positions_mm（包含 center_point 和 mounting_height_mm）
+
+【推荐但可省略字段】包括：
+- lighting_design.fixture_specs（power_w, luminous_flux_lm, color_temperature_k, cri, dimensions_mm）
+- lighting_design.control_system
+- lighting_design.wiring
+- lighting_design.compliance_standards
+- lighting_design.design_notes
+
+**给出你的推理过程**
+
+### 示例输入：
+- 房间类型：""{0}""
+- 坐标：{1}
+
+请开始生成：";
         public const string CADPrompt1 = "请一字不差的回复我以下内容：好的，正在进行图纸识别，，，";
         public const string CADPrompt2 = "请一字不差的回复我以下内容：好的，**正在进行灯具和插座布置**，，，";
         public const string CADPrompt3 = "请一字不差的回复我以下内容：**正在进行线路连接**，，，";

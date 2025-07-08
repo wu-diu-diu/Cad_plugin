@@ -4,12 +4,15 @@ using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.Runtime;
 using Autodesk.AutoCAD.Windows;
+using Autodesk.Windows;
 using BoundingRectangle;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Xml.Schema;
 using static System.Net.Mime.MediaTypeNames;
@@ -26,8 +29,8 @@ namespace CoDesignStudy.Cad.PlugIn
     public class Command : IExtensionApplication
     {
         #region 成员变量
-
-
+        public string FinalPrompt;
+        public static PaletteSetDlg DlgInstance;
         #endregion
 
         #region 初始化
@@ -54,9 +57,12 @@ namespace CoDesignStudy.Cad.PlugIn
                 {
                     throw new System.Exception("当前未开启任何文件！");
                 }
+                // 以下代码初始化了一个paletteset类为mainpaletteset，用来管理自定义的面板
                 PrjExploreHelper.InitPalette();
-                PaletteSetDlg dlg = new PaletteSetDlg();
-                PrjExploreHelper.MainPaletteset.Add("测试界面", dlg);
+                // palettesetdlg是继承自usercontrol，用户实现具体的界面和交互逻辑，它是一个winform控件，不能直接在cad界面中显示，必须添加到paletteset中
+                DlgInstance = new PaletteSetDlg();
+                // 将自定义的winform控件添加到mainpaletteset之后，侧边栏才能显示自定义的控件比如发送按钮，聊天的背景颜色等等。
+                PrjExploreHelper.MainPaletteset.Add("测试界面", DlgInstance);
             }
             catch (System.Exception ex)
             {
@@ -151,30 +157,6 @@ namespace CoDesignStudy.Cad.PlugIn
                             ent.Highlight();
                         }
                     }
-                }
-                tr.Commit();
-            }
-        }
-        private void DrawGreenRectangleByPoints(List<double[]> rectPoints, Database db)
-        {
-            if (rectPoints == null || rectPoints.Count != 4) return;
-
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
-
-                for (int i = 0; i < 4; i++)
-                {
-                    double[] start = rectPoints[i];
-                    double[] end = rectPoints[(i + 1) % 4];
-                    Line line = new Line(
-                        new Point3d(start[0], start[1], 0),
-                        new Point3d(end[0], end[1], 0)
-                    );
-                    line.ColorIndex = 3; // 绿色
-                    modelSpace.AppendEntity(line);
-                    tr.AddNewlyCreatedDBObject(line, true);
                 }
                 tr.Commit();
             }
@@ -289,6 +271,51 @@ namespace CoDesignStudy.Cad.PlugIn
             public Dictionary<string, double> PolylineLengthByLayer { get; set; } = new Dictionary<string, double>();
             public List<object> Texts { get; set; } = new List<object>();
             public List<double[]> RectPoints { get; set; } = new List<double[]>();
+        }
+
+        public class LightingDesignResponse
+        {
+            public RoomInfo room_info { get; set; }
+            public LightingDesign lighting_design { get; set; }
+
+            public class RoomInfo
+            {
+                public string room_type { get; set; }
+                public List<List<int>> coordinates_mm { get; set; }
+                public Dimensions dimensions { get; set; }
+                public int illuminance_standard_lx { get; set; }
+            }
+
+            public class Dimensions
+            {
+                public int length_mm { get; set; }
+                public int width_mm { get; set; }
+                public double area_m2 { get; set; }
+            }
+
+            public class LightingDesign
+            {
+                public string fixture_type { get; set; }
+                public int fixture_count { get; set; }
+                public List<FixturePosition> fixture_positions_mm { get; set; }
+                public FixtureSpecs fixture_specs { get; set; }
+                public string design_notes { get; set; }
+            }
+
+            public class FixturePosition
+            {
+                public List<int> center_point { get; set; }
+                public int mounting_height_mm { get; set; }
+            }
+
+            public class FixtureSpecs
+            {
+                public int power_w { get; set; }
+                public int luminous_flux_lm { get; set; }
+                public int color_temperature_k { get; set; }
+                public int cri { get; set; }
+                public List<int> dimensions_mm { get; set; }
+            }
         }
 
         [CommandMethod("SELECT_RECT_PRINT", CommandFlags.Session)]
@@ -412,13 +439,13 @@ namespace CoDesignStudy.Cad.PlugIn
                         if (!string.IsNullOrEmpty(content) &&
                             (content.EndsWith("室") || content.EndsWith("间")))
                         {
-                        result.Texts.Add(new
-                        {
+                            result.Texts.Add(new
+                            {
                                 content = content,
-                            position = new double[] { dBText.Position.X, dBText.Position.Y, dBText.Position.Z }
-                        });
+                                position = new double[] { dBText.Position.X, dBText.Position.Y, dBText.Position.Z }
+                            });
                             ed.WriteMessage($"\n类型: DBText, 内容: \"{content}\", 位置: {dBText.Position}, 对象ID: {ent.ObjectId}");
-                    }
+                        }
                     }
                     else if (ent is Polyline polyline)
                     {
@@ -460,19 +487,43 @@ namespace CoDesignStudy.Cad.PlugIn
                 roomType = prop.GetValue(textObj)?.ToString();
             string CaculatePromptTemplate = Prompt.CaculatePrompt;
             // 生成完整Prompt
-            FinalPrompt = string.Format(CaculatePromptTemplate, roomType, coordinatesStr);
+            string prompt = string.Format(CaculatePromptTemplate, roomType, coordinatesStr);
+            //// 找到打开的winform控件
+            //PaletteSetDlg dlg = Command.DlgInstance;
 
-            Task.Run(async () =>
+            //if (dlg == null)
+            //{
+            //    ed.WriteMessage("\n未找到AI对话面板，请先初始化PaletteSet。");
+            //    return;
+            //}
+            //// 异步调用
+            //Task.Run(async () =>
+            //{
+            //    try
+            //    {
+            //        await SelectEntitiesByRectangleAndPrintInfoAsync(prompt, dlg);
+            //    }
+            //    catch (System.Exception ex)
+            //    {
+            //        ed.WriteMessage($"\n错误: {ex.Message}");
+            //    }
+            //});
+
+            // 非流式调用模型
+            string reply = Task.Run(() => PaletteSetDlg.CallLLMAsync(prompt)).GetAwaiter().GetResult();
+
+            var match = Regex.Match(reply, @"```json\s*([\s\S]+?)\s*```");
+
+            if (!match.Success)
             {
-                try
-                {
-                    await SelectEntitiesByRectangleAndPrintInfoAsync();
-                }
-                catch (System.Exception ex)
-                {
-                    Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.Editor.WriteMessage($"\n错误: {ex.Message}");
+                ed.WriteMessage("未找到JSON内容");
+                return;
             }
-            });
+
+            string ModelReplyJson = match.Groups[1].Value;
+            var obj = JsonConvert.DeserializeObject<LightingDesignResponse>(ModelReplyJson);
+            ed.WriteMessage($"灯具类型：{obj.lighting_design.fixture_type}");
+            ed.WriteMessage($"灯具数量：{obj.lighting_design.fixture_count}");
 
             // 输出结构化JSON
             string json = Newtonsoft.Json.JsonConvert.SerializeObject(result, Newtonsoft.Json.Formatting.Indented);
@@ -490,147 +541,12 @@ namespace CoDesignStudy.Cad.PlugIn
                 ed.WriteMessage($"\n导出JSON文件失败: {ex.Message}");
             }
         }
-        private async Task SelectEntitiesByRectangleAndPrintInfoAsync()
+        private async Task SelectEntitiesByRectangleAndPrintInfoAsync(string prompt, PaletteSetDlg dlg)
         {
-            PaletteSetDlg dlg = new PaletteSetDlg();
             Action<string> updateFunc = null;
             // 等待 AI 控件初始化并获得更新函数
             var aiContentControl = await dlg.AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
-            await dlg.GetAIResponse(FinalPrompt, updateFunc);
-        }
-
-        [CommandMethod("DELETE_LAYER_AND_ENTITY", CommandFlags.Session)]
-        public void DeleteLayerAndEntity()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Editor ed = doc.Editor;
-            Database db = doc.Database;
-
-            // 提示用户输入图层名
-            PromptStringOptions pso = new PromptStringOptions("\n请输入要删除的图层名: ");
-            pso.AllowSpaces = true;
-            PromptResult pr = ed.GetString(pso);
-            if (pr.Status != PromptStatus.OK) return;
-            string layerName = pr.StringResult.Trim();
-
-            using (DocumentLock docLock = doc.LockDocument())
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-
-                // 检查图层是否存在
-                if (!lt.Has(layerName))
-                {
-                    ed.WriteMessage($"\n图层 \"{layerName}\" 不存在。");
-                    return;
-                }
-
-                // 不能删除0层、Defpoints层或当前图层
-                LayerTableRecord layerRec = (LayerTableRecord)tr.GetObject(lt[layerName], OpenMode.ForWrite);
-                if (layerRec.IsDependent || layerRec.IsErased || layerRec.Name == "0" || layerRec.Name.ToUpper() == "DEFPOINTS" || db.Clayer == layerRec.ObjectId)
-                {
-                    ed.WriteMessage($"\n不能删除0层、Defpoints层或当前图层。");
-                    return;
-                }
-
-                // 删除所有属于该图层的实体
-                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                foreach (ObjectId btrId in bt)
-                {
-                    BlockTableRecord btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForWrite);
-                    List<ObjectId> toErase = new List<ObjectId>();
-                    foreach (ObjectId entId in btr)
-                    {
-                        Entity ent = tr.GetObject(entId, OpenMode.ForRead) as Entity;
-                        if (ent != null && ent.Layer == layerName)
-                        {
-                            toErase.Add(entId);
-                        }
-                    }
-                    foreach (ObjectId entId in toErase)
-                    {
-                        Entity ent = tr.GetObject(entId, OpenMode.ForWrite) as Entity;
-                        ent.Erase();
-                    }
-                }
-
-                // 删除图层
-                layerRec.Erase();
-
-                tr.Commit();
-                ed.WriteMessage($"\n图层 \"{layerName}\" 及其所有实体已删除。");
-            }
-        }
-        [CommandMethod("DELETE_EXCEPT_LAYERS", CommandFlags.Session)]
-        public void DeleteExceptLayers()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Editor ed = doc.Editor;
-            Database db = doc.Database;
-
-            // 需要保留的图层名（全部大写，便于比较）
-            HashSet<string> keepLayers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                "COLUMN",
-                "PUB_HATCH",
-                "PUB_TEXT",
-                "STAIR",
-                "WALL",
-                "WINDOW",
-                "WINDOW_TEXT",
-                "0",           // 通常建议保留0层
-                "DEFPOINTS"    // 通常建议保留Defpoints层
-            };
-
-            using (DocumentLock docLock = doc.LockDocument())
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                List<string> toDelete = new List<string>();
-
-                // 收集要删除的图层名
-                foreach (ObjectId layerId in lt)
-                {
-                    LayerTableRecord ltr = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForRead);
-                    string lname = ltr.Name;
-                    if (!keepLayers.Contains(lname) && !ltr.IsDependent && !ltr.IsErased && db.Clayer != ltr.ObjectId)
-                    {
-                        toDelete.Add(lname);
-                    }
-                }
-
-                // 删除每个图层上的实体和图层本身
-                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                foreach (string layerName in toDelete)
-                {
-                    // 删除实体
-                    foreach (ObjectId btrId in bt)
-                    {
-                        BlockTableRecord btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForWrite);
-                        List<ObjectId> toErase = new List<ObjectId>();
-                        foreach (ObjectId entId in btr)
-                        {
-                            Entity ent = tr.GetObject(entId, OpenMode.ForRead) as Entity;
-                            if (ent != null && ent.Layer.Equals(layerName, StringComparison.OrdinalIgnoreCase))
-                            {
-                                toErase.Add(entId);
-                            }
-                        }
-                        foreach (ObjectId entId in toErase)
-                        {
-                            Entity ent = tr.GetObject(entId, OpenMode.ForWrite) as Entity;
-                            ent.Erase();
-                        }
-                    }
-                    // 删除图层
-                    LayerTableRecord ltr = (LayerTableRecord)tr.GetObject(lt[layerName], OpenMode.ForWrite);
-                    ltr.Erase();
-                    ed.WriteMessage($"\n已删除图层及其实体: {layerName}");
-                }
-
-                tr.Commit();
-                ed.WriteMessage($"\n操作完成，已保留指定图层，其余图层及实体全部删除。");
-            }
+            await dlg.GetAIResponse(prompt, updateFunc);
         }
         #endregion
     }

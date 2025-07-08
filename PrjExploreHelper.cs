@@ -32,6 +32,8 @@ namespace CoDesignStudy.Cad.PlugIn
         {
             try
             {
+                // mainpaletteset是一个容器，负责CAD的侧边栏显示和管理面板
+                // 创建了这个容器之后，就可以自定义多个面板来进行管理
                 MainPaletteset = new PaletteSet("ChatCAD", Guid.NewGuid());
                 MainPaletteset.Style = PaletteSetStyles.Snappable | PaletteSetStyles.ShowCloseButton | PaletteSetStyles.ShowAutoHideButton;
                 MainPaletteset.DockEnabled = DockSides.Left | DockSides.None;
