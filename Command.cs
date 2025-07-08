@@ -522,12 +522,34 @@ namespace CoDesignStudy.Cad.PlugIn
 
             string ModelReplyJson = match.Groups[1].Value;
             var obj = JsonConvert.DeserializeObject<LightingDesignResponse>(ModelReplyJson);
-            ed.WriteMessage($"灯具类型：{obj.lighting_design.fixture_type}");
-            ed.WriteMessage($"灯具数量：{obj.lighting_design.fixture_count}");
+
+            List<Point3d> insertPoints = new List<Point3d>();
+
+            foreach (var fixture in obj.lighting_design.fixture_positions_mm)
+            {
+                if (fixture.center_point.Count >= 2)
+                {
+                    double x = fixture.center_point[0];
+                    double y = fixture.center_point[1];
+                    double z = 0; // 或 fixture.mounting_height_mm 视情况而定
+
+                    insertPoints.Add(new Point3d(x, y, z));
+                }
+            }
+            string targetLayer = "AI"; // 或者你自己的目标图层名
+
+            foreach (var pt in insertPoints)
+            {
+                InsertBlockFromDwg(pt, targetLayer);
+            }
+            //int GenLightCount = obj.lighting_design.fixture_count;
+            //List<> GenLightPositions = obj.lighting_design.fixture_positions_mm;
 
             // 输出结构化JSON
             string json = Newtonsoft.Json.JsonConvert.SerializeObject(result, Newtonsoft.Json.Formatting.Indented);
             ed.WriteMessage($"\n{json}");
+            ed.WriteMessage($"\n灯具类型：{obj.lighting_design.fixture_type}");
+            ed.WriteMessage($"\n灯具数量：{obj.lighting_design.fixture_count}");
 
             // 导出到文件
             try
@@ -539,6 +561,49 @@ namespace CoDesignStudy.Cad.PlugIn
             catch (System.Exception ex)
             {
                 ed.WriteMessage($"\n导出JSON文件失败: {ex.Message}");
+            }
+        }
+        public void InsertBlockFromDwg(Point3d insertPoint, string targetLayer)
+        {
+            //Point3d insertPoint = new Point3d(32267, 52942, 0); // 插入点坐标
+            //string targetLayer = "AI";
+            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+            string dwgFilePath = @"C:\Users\武丢丢\Documents\gen_light.dwg"; // 固定块文件路径
+            string blockName = "AI_Gen_Light"; // 块名
+
+            using (DocumentLock docLock = doc.LockDocument())
+            {
+                // 导入块定义到当前数据库
+                using (Database sourceDb = new Database(false, true))
+                {
+                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
+                    db.Insert(blockName, sourceDb, true);
+                }
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                    BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+                    // 确保图层存在，不存在则创建
+                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                    if (!lt.Has(targetLayer))
+                    {
+                        lt.UpgradeOpen();
+                        LayerTableRecord newLayer = new LayerTableRecord { Name = targetLayer };
+                        lt.Add(newLayer);
+                        tr.AddNewlyCreatedDBObject(newLayer, true);
+                    }
+
+                    // 插入块参照
+                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
+                    br.Layer = targetLayer;
+                    modelSpace.AppendEntity(br);
+                    tr.AddNewlyCreatedDBObject(br, true);
+
+                    tr.Commit();
+                }
             }
         }
         private async Task SelectEntitiesByRectangleAndPrintInfoAsync(string prompt, PaletteSetDlg dlg)
