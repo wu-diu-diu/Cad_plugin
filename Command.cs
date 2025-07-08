@@ -485,32 +485,14 @@ namespace CoDesignStudy.Cad.PlugIn
             var prop = textObj.GetType().GetProperty("content");
             if (prop != null)
                 roomType = prop.GetValue(textObj)?.ToString();
-            string CaculatePromptTemplate = Prompt.CaculatePrompt;
-            // 生成完整Prompt
-            string prompt = string.Format(CaculatePromptTemplate, roomType, coordinatesStr);
-            //// 找到打开的winform控件
-            //PaletteSetDlg dlg = Command.DlgInstance;
 
-            //if (dlg == null)
-            //{
-            //    ed.WriteMessage("\n未找到AI对话面板，请先初始化PaletteSet。");
-            //    return;
-            //}
-            //// 异步调用
-            //Task.Run(async () =>
-            //{
-            //    try
-            //    {
-            //        await SelectEntitiesByRectangleAndPrintInfoAsync(prompt, dlg);
-            //    }
-            //    catch (System.Exception ex)
-            //    {
-            //        ed.WriteMessage($"\n错误: {ex.Message}");
-            //    }
-            //});
+            string CaculatePromptTemplate = Prompt.CaculatePrompt2;
+            // 生成完整Prompt
+            string prompt = Prompt.GetLightingPrompt(roomType, coordinatesStr);
 
             // 非流式调用模型
             string reply = Task.Run(() => PaletteSetDlg.CallLLMAsync(prompt)).GetAwaiter().GetResult();
+            string Thinking_content = "";
 
             var match = Regex.Match(reply, @"```json\s*([\s\S]+?)\s*```");
 
@@ -521,6 +503,16 @@ namespace CoDesignStudy.Cad.PlugIn
             }
 
             string ModelReplyJson = match.Groups[1].Value;
+            Thinking_content = Regex.Replace(reply, @"```json\s*([\s\S]+?)\s*```", "").Trim();
+
+            if (Command.DlgInstance != null)
+            {
+                Task.Run(async () =>
+                {
+                    await Command.DlgInstance.AppendMessageSync("AI", Thinking_content);
+                });
+            }
+
             var obj = JsonConvert.DeserializeObject<LightingDesignResponse>(ModelReplyJson);
 
             // 提取坐标点
@@ -687,7 +679,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 poly.Layer = layerName;
 
                 poly.Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 153);
-                poly.ConstantWidth = 1.0f;
+                poly.ConstantWidth = 5.0f;
 
                 btr.AppendEntity(poly);
                 tr.AddNewlyCreatedDBObject(poly, true);

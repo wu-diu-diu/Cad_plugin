@@ -239,6 +239,110 @@ namespace CoDesignStudy.Cad.PlugIn
             return contentControl;
         }
 
+        public Task<Control> AppendMessageSync(string sender, string message)
+        {
+            if (string.IsNullOrWhiteSpace(message)) return Task.FromResult<Control>(null);
+
+            Control contentControl;
+
+            // AI 使用 WebView 渲染 markdown，用户使用 Label
+            if (sender == "AI")
+            {
+                var webView = new WebView2
+                {
+                    Width = conversationPanel.Width - 150,
+                    Margin = new Padding(0),
+                    Height = 1,
+                    DefaultBackgroundColor = Color.White
+                };
+
+                webView.EnsureCoreWebView2Async().Wait();
+
+                string html = Markdig.Markdown.ToHtml(message);
+                string doc = $@"
+<html><head>
+<script src='https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js'></script>
+</head>
+<body style='font-family:微软雅黑;font-size:10pt;background-color:#FFFFFF;margin:0;padding:0;'>
+{html}
+</body></html>";
+
+                webView.CoreWebView2.NavigateToString(doc);
+                contentControl = webView;
+            }
+            else
+            {
+                contentControl = new Label
+                {
+                    Text = message,
+                    AutoSize = true,
+                    Font = new System.Drawing.Font("微软雅黑", 10),
+                    MaximumSize = new Size(conversationPanel.Width - 150, 0),
+                    Padding = new Padding(10),
+                    BackColor = Color.LightBlue,
+                    Margin = new Padding(5)
+                };
+            }
+
+            // 头像
+            var avatar = new PictureBox
+            {
+                Size = new Size(40, 40),
+                SizeMode = PictureBoxSizeMode.Zoom,
+                Margin = new Padding(5),
+                Image = sender == "用户"
+                    ? System.Drawing.Image.FromFile("userAvatar.png")
+                    : System.Drawing.Image.FromFile("aiAvatar.png")
+            };
+
+            var horizontalPanel = new FlowLayoutPanel
+            {
+                AutoSize = true,
+                FlowDirection = sender == "用户" ? System.Windows.Forms.FlowDirection.RightToLeft : System.Windows.Forms.FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+                Padding = new Padding(0)
+            };
+
+            horizontalPanel.Controls.Add(avatar);
+            horizontalPanel.Controls.Add(contentControl);
+            // TODO: 鼠标滚动只能在侧边栏的最右侧实现，可能是因为ai回复消息的气泡的控件不支持鼠标滚动
+            var container = new FlowLayoutPanel
+            {
+                AutoSize = true,                       // ✅ 必须，确保高度自适应
+                Anchor = AnchorStyles.Left,           // ✅ 防止错位
+                Margin = new Padding(0),              // ✅ 清除默认边距
+                Padding = new Padding(0),
+                FlowDirection = System.Windows.Forms.FlowDirection.LeftToRight,
+                WrapContents = false
+            };
+
+            if (sender == "用户")
+            {
+                container.Controls.Add(new Label()
+                {
+                    Width = conversationPanel.Width - horizontalPanel.PreferredSize.Width - 30,
+                    AutoSize = false
+                });
+                container.Controls.Add(horizontalPanel);
+            }
+            else
+            {
+                container.Controls.Add(horizontalPanel);
+                container.Controls.Add(new Label()
+                {
+                    Width = conversationPanel.Width - horizontalPanel.PreferredSize.Width - 30,
+                    AutoSize = false
+                });
+            }
+
+            conversationPanel.Controls.Add(container);
+            conversationPanel.Controls.Add(new Panel() { Height = 10, Dock = DockStyle.Top });
+            conversationPanel.ScrollControlIntoView(container);
+
+            return Task.FromResult<Control>(contentControl);
+        }
+
 
         public async Task<string> GetAIResponse(string userMessage, Action<string> updateContent)
         {
