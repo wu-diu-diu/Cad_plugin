@@ -239,37 +239,54 @@ namespace CoDesignStudy.Cad.PlugIn
 }}
 ```
 ";
-        public static string GetLightingPrompt(string roomType, string coordinatesStr)
+        public static string GetLightingPrompt(string roomType, string coordinatesStr, string doorPositionStr)
         {
-            return $@"你是一名专业的电气设计助手，任务是根据房间名称和其平面坐标信息，进行照明设计分析，并输出符合设计规范的灯具布置方案。
+            return $@"你是一名专业的电气设计助手，任务是根据房间名称、房间的四个坐标点，以及门的位置，进行如下电气设计：
+
+- 房间照明布置（含照度分析、灯具选择与布局）；
+- 插座的合理布置（贴墙，符合施工要求）；
+- 开关的合理放置（靠近门）；
 
 请你遵循以下步骤：
 
 1. 根据房间名称，查找并确定该房间的国家标准照度值（单位 lx）；
-2. 根据给定的四个坐标点，计算房间的面积（单位 m²）；
-3. 根据照度需求和面积，结合维护系数(默认 0.8)，计算出所需总光通量（单位 lm），进而确定灯具的总数量；
-4. 选用合适的灯具型号（如：LED面板灯、防爆灯等），说明选择理由；
+2. 根据给定的四个坐标点（单位 mm），计算房间的面积（单位 m²）；
+3. 根据照度需求和面积，结合维护系数(默认 0.8)，计算所需总光通量（单位 lm）；
+4. 选择合适的灯具型号（如：LED面板灯、防爆灯等），并说明选择理由；
 5. 根据每盏灯的光通量，估算所需灯具数量；
-6. 合理设计灯具的布置方式（例如：按行列均匀排列），并输出每盏灯的中心坐标和安装高度（单位：mm）；
-7. **最后输出以下格式的JSON对象**，供程序解析使用：
+6. 设计灯具的布置方式（如：按行列均匀排列），并输出每盏灯的中心坐标和安装高度（单位：mm）；
+7. 设计插座布置：插座应靠墙放置，通常布置在左右墙上（即坐标最小/最大 x 所在的墙）。左墙插入角度为 -90°，右墙插入角度为 90°，每面墙建议至少布置 1 个插座；
+8. 设计开关位置：应靠近门的位置布置开关，尽量选择离门最近的墙体边界点，有几个门就有几个开关；
+9. 最后以 JSON 格式输出灯具、插座、开关的布置信息，供程序解析使用：
 
 ```json
 {{
   ""lighting_design"": {{
     ""fixture_type"": ""灯具类型（如：LED防爆灯）"",
     ""fixture_count"": 灯具数量（整数）,
+    ""power_w"": 灯具功率（整数，单位 W）,
+    ""mounting_height_mm"": 安装高度（单位 mm，统一值）,
     ""fixture_positions_mm"": [
-      {{
-        ""center_point"": [x1, y1],
-        ""mounting_height_mm"": 安装高度
-      }}
+      [x1, y1],
+      [x2, y2],
       ...
     ]
+  }},
+  ""socket_positions"": [
+    {{
+      ""position_mm"": [x, y],
+      ""rotation_degrees"": 插入角度
+    }}
+    ...
+  ],
+  ""switch_position"": {{
+    ""position_mm"": [x, y]
   }}
 }}
 ### 输入：
 - 房间类型：{roomType}
-- 坐标：{coordinatesStr}
+- 房间坐标：{coordinatesStr}
+- 门的坐标：{doorPositionStr}
 ";
 }
         public static readonly string CaculatePrompt = @"你是建筑照明设计领域的专家，现在请你根据给定房间的角点坐标和房间类型，生成符合下列 JSON 结构的灯具布置建议。

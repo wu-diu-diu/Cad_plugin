@@ -14,6 +14,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Xml.Linq;
 using System.Xml.Schema;
 using static System.Net.Mime.MediaTypeNames;
 using CADApplication = Autodesk.AutoCAD.ApplicationServices.Application;
@@ -277,6 +278,8 @@ namespace CoDesignStudy.Cad.PlugIn
         {
             public RoomInfo room_info { get; set; }
             public LightingDesign lighting_design { get; set; }
+            public List<SocketPosition> socket_positions { get; set; }
+            public SwitchPosition switch_position { get; set; }
 
             public class RoomInfo
             {
@@ -297,26 +300,23 @@ namespace CoDesignStudy.Cad.PlugIn
             {
                 public string fixture_type { get; set; }
                 public int fixture_count { get; set; }
-                public List<FixturePosition> fixture_positions_mm { get; set; }
-                public FixtureSpecs fixture_specs { get; set; }
-                public string design_notes { get; set; }
-            }
-
-            public class FixturePosition
-            {
-                public List<int> center_point { get; set; }
-                public int mounting_height_mm { get; set; }
-            }
-
-            public class FixtureSpecs
-            {
                 public int power_w { get; set; }
-                public int luminous_flux_lm { get; set; }
-                public int color_temperature_k { get; set; }
-                public int cri { get; set; }
-                public List<int> dimensions_mm { get; set; }
+                public int mounting_height_mm { get; set; }
+                public List<List<int>> fixture_positions_mm { get; set; }
+            }
+
+            public class SocketPosition
+            {
+                public List<int> position_mm { get; set; }
+                public int rotation_degrees { get; set; }
+            }
+
+            public class SwitchPosition
+            {
+                public List<int> position_mm { get; set; }
             }
         }
+
 
         [CommandMethod("SELECT_RECT_PRINT", CommandFlags.Session)]
         public void SelectEntitiesByRectangleAndPrintInfo()
@@ -324,6 +324,9 @@ namespace CoDesignStudy.Cad.PlugIn
             Document doc = CADApplication.DocumentManager.MdiActiveDocument;
             Editor ed = doc.Editor;
             Database db = doc.Database;
+            // 保存门的坐标
+            List<Point3d> doorPoints = new List<Point3d>();
+            string[] doorNames = new[] { "$DorLib2D$00000001", "$DorLib2D$00000002" };
 
             HashSet<string> keepLayers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
@@ -464,6 +467,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 ed.WriteMessage($"\n共选中 {count} 个图元。");
                 tr.Commit();
             }
+            // 柱子坐标提取出来，计算最小外接矩形
             if (result.Blocks.ContainsKey("_FZH"))
             {
                 var rectPoints = BoundingRectangle.Program
@@ -471,12 +475,36 @@ namespace CoDesignStudy.Cad.PlugIn
                 .Select(p => new double[] { p.X, p.Y }).ToList();
                 result.RectPoints = rectPoints;
             }
+            foreach (string doorName in doorNames)
+            {
+                if (result.Blocks.ContainsKey(doorName))
+                {
+                    foreach (var coords in result.Blocks[doorName])
+                    {
+                        if (coords.Length >= 2)
+                        {
+                            double x = coords[0];
+                            double y = coords[1];
+                            double z = coords.Length >= 3 ? coords[2] : 0;
+
+                            doorPoints.Add(new Point3d(x, y, z));
+                        }
+                    }
+                }
+            }
+            // 最小外接矩形的坐标变为整数
             var intRectPoints = result.RectPoints
                 .Select(pt => pt.Select(x => (int)x).ToArray())
                 .ToList();
-            // 转为字符串（如 [[32267, 52942], [41142, 52942], ...]）
+            // 绘制一个矩形方便查看算法识别的最小外接矩形范围
+            DrawRectanglePolyline(intRectPoints);
+            // 外接矩形的坐标转为字符串（如 [[32267, 52942], [41142, 52942], ...]）
             string coordinatesStr = "[" + string.Join(", ", intRectPoints.Select(
                                         pt => $"[{string.Join(", ", pt)}]"
+                                    )) + "]";
+            // 门的坐标转为字符串
+            string doorPositionStr = "[" + string.Join(", ", doorPoints.Select(
+                                        pt => $"[{(int)pt.X}, {(int)pt.Y}]"
                                     )) + "]";
 
             var textObj = result.Texts[0];
@@ -488,7 +516,7 @@ namespace CoDesignStudy.Cad.PlugIn
 
             string CaculatePromptTemplate = Prompt.CaculatePrompt2;
             // 生成完整Prompt
-            string prompt = Prompt.GetLightingPrompt(roomType, coordinatesStr);
+            string prompt = Prompt.GetLightingPrompt(roomType, coordinatesStr, doorPositionStr);
 
             // 非流式调用模型
             string reply = Task.Run(() => PaletteSetDlg.CallLLMAsync(prompt)).GetAwaiter().GetResult();
@@ -515,29 +543,50 @@ namespace CoDesignStudy.Cad.PlugIn
 
             var obj = JsonConvert.DeserializeObject<LightingDesignResponse>(ModelReplyJson);
 
-            // 提取坐标点
+            // 保存灯具坐标点以供线路连接
             List<Point3d> insertPoints = new List<Point3d>();
-
-            foreach (var fixture in obj.lighting_design.fixture_positions_mm)
+            // 插入灯具
+            foreach (var point in obj.lighting_design.fixture_positions_mm)
             {
-                if (fixture.center_point.Count >= 2)
+                string LightLayer = "照明";
+                if (point.Count >= 2)
                 {
-                    double x = fixture.center_point[0];
-                    double y = fixture.center_point[1];
-                    double z = 0; // 或 fixture.mounting_height_mm 视情况而定
-
+                    double x = point[0];
+                    double y = point[1];
+                    double z = 0;
                     insertPoints.Add(new Point3d(x, y, z));
+                    InsertBlockFromDwg(new Point3d(x, y, z), LightLayer, "gen_light");
                 }
             }
-            string targetLayer = "照明"; // 或者你自己的目标图层名
-
-            foreach (var pt in insertPoints)
+            // 插入插座
+            if (obj.socket_positions != null)
             {
-                InsertBlockFromDwg(pt, targetLayer);
+                string socketLayer = "插座"; // 替换为你项目中的图层名
+                foreach (var socket in obj.socket_positions)
+                {
+                    if (socket.position_mm.Count >= 2)
+                    {
+                        double x = socket.position_mm[0];
+                        double y = socket.position_mm[1];
+                        double z = 0;
+                        double rotationDeg = socket.rotation_degrees;
+
+                        InsertBlockFromDwg(new Point3d(x, y, z), socketLayer, "插座", rotationDeg);
+                    }
+                }
             }
-            DrawClosedPolyline(insertPoints, "照明-WIRE");
-            //int GenLightCount = obj.lighting_design.fixture_count;
-            //List<> GenLightPositions = obj.lighting_design.fixture_positions_mm;
+
+            // 插入开关
+            if (obj.switch_position?.position_mm != null && obj.switch_position.position_mm.Count >= 2)
+            {
+                string switchLayer = "开关"; // 替换为你项目中的图层名
+                double x = obj.switch_position.position_mm[0];
+                double y = obj.switch_position.position_mm[1];
+                double z = 0;
+                InsertBlockFromDwg(new Point3d(x, y, z), switchLayer, "开关");
+            }
+            // 生成线路
+            DrawOpenPolyline(insertPoints, "照明-WIRE");
 
             // 输出结构化JSON
             string json = Newtonsoft.Json.JsonConvert.SerializeObject(result, Newtonsoft.Json.Formatting.Indented);
@@ -545,6 +594,7 @@ namespace CoDesignStudy.Cad.PlugIn
             ed.WriteMessage($"\n灯具类型：{obj.lighting_design.fixture_type}");
             ed.WriteMessage($"\n灯具数量：{obj.lighting_design.fixture_count}");
             ed.WriteMessage($"\n灯具坐标：{obj.lighting_design.fixture_positions_mm}");
+            ed.WriteMessage($"\n推理过程：{Thinking_content}");
 
             // 导出到文件
             try
@@ -558,13 +608,67 @@ namespace CoDesignStudy.Cad.PlugIn
                 ed.WriteMessage($"\n导出JSON文件失败: {ex.Message}");
             }
         }
-        public void InsertBlockFromDwg(Point3d insertPoint, string targetLayer)
+        public void InsertBlockFromDwg(Point3d insertPoint, string targetLayer, string blockName, double rotationDegrees = 0)
         {
-            //Point3d insertPoint = new Point3d(32267, 52942, 0); // 插入点坐标
-            //string targetLayer = "AI";
             Document doc = CADApplication.DocumentManager.MdiActiveDocument;
             Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\gen_light.dwg"; // 固定块文件路径
+            // 构建 DWG 文件路径
+            string blocksDirectory = @"C:\Users\武丢丢\Documents\gen_light\";  // ✅ 修改为你实际的路径
+            string dwgFilePath = Path.Combine(blocksDirectory, blockName + ".dwg");
+
+            if (!File.Exists(dwgFilePath))
+            {
+                Autodesk.AutoCAD.ApplicationServices.Application.ShowAlertDialog($"找不到块文件：{dwgFilePath}");
+                return;
+            }
+
+            using (DocumentLock docLock = doc.LockDocument())
+            {
+                // 导入块定义到当前数据库
+                using (Database sourceDb = new Database(false, true))
+                {
+                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
+                    db.Insert(blockName, sourceDb, true);
+                }
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                    BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+                    // 确保图层存在，不存在则创建
+                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                    if (!lt.Has(targetLayer))
+                    {
+                        lt.UpgradeOpen();
+                        LayerTableRecord newLayer = new LayerTableRecord { Name = targetLayer };
+                        lt.Add(newLayer);
+                        tr.AddNewlyCreatedDBObject(newLayer, true);
+                    }
+
+                    // 插入块参照，设置旋转角度（单位为弧度）
+                    double rotationRadians = rotationDegrees * Math.PI / 180.0;
+                    BlockReference br = new BlockReference(insertPoint, bt[blockName])
+                    {
+                        Layer = targetLayer,
+                        Rotation = rotationRadians
+                    };
+                    modelSpace.AppendEntity(br);
+                    tr.AddNewlyCreatedDBObject(br, true);
+
+                    tr.Commit();
+                }
+            }
+        }
+        [CommandMethod("test", CommandFlags.Session)]
+        public void InsertBlockFromDwgTest()
+        {
+            Point3d insertPoint = new Point3d(34640, 55259, 0);
+            string targetLayer = "AI";
+            double rotationDegrees = -90;
+            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+            string dwgFilePath = @"C:\Users\武丢丢\Documents\gen_light\插座新.dwg"; // 固定块文件路径
             string blockName = "AI_Gen_Light"; // 块名
 
             using (DocumentLock docLock = doc.LockDocument())
@@ -591,9 +695,13 @@ namespace CoDesignStudy.Cad.PlugIn
                         tr.AddNewlyCreatedDBObject(newLayer, true);
                     }
 
-                    // 插入块参照
-                    BlockReference br = new BlockReference(insertPoint, bt[blockName]);
-                    br.Layer = targetLayer;
+                    // 插入块参照，设置旋转角度（单位为弧度）
+                    double rotationRadians = rotationDegrees * Math.PI / 180.0;
+                    BlockReference br = new BlockReference(insertPoint, bt[blockName])
+                    {
+                        Layer = targetLayer,
+                        Rotation = rotationRadians
+                    };
                     modelSpace.AppendEntity(br);
                     tr.AddNewlyCreatedDBObject(br, true);
 
@@ -679,11 +787,133 @@ namespace CoDesignStudy.Cad.PlugIn
                 poly.Layer = layerName;
 
                 poly.Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 153);
-                poly.ConstantWidth = 5.0f;
+                poly.ConstantWidth = 35f;
 
                 btr.AppendEntity(poly);
                 tr.AddNewlyCreatedDBObject(poly, true);
 
+                tr.Commit();
+            }
+        }
+        public static List<Point3d> SortPointsNearestPath(List<Point3d> inputPoints)
+        {
+            if (inputPoints == null || inputPoints.Count == 0)
+                return new List<Point3d>();
+
+            List<Point3d> sorted = new List<Point3d>();
+            HashSet<int> visited = new HashSet<int>();
+
+            Point3d current = inputPoints[0];
+            sorted.Add(current);
+            visited.Add(0);
+
+            while (visited.Count < inputPoints.Count)
+            {
+                double minDist = double.MaxValue;
+                int nearestIndex = -1;
+
+                for (int i = 0; i < inputPoints.Count; i++)
+                {
+                    if (visited.Contains(i)) continue;
+
+                    double dist = current.DistanceTo(inputPoints[i]);
+                    if (dist < minDist)
+                    {
+                        minDist = dist;
+                        nearestIndex = i;
+                    }
+                }
+
+                if (nearestIndex != -1)
+                {
+                    current = inputPoints[nearestIndex];
+                    sorted.Add(current);
+                    visited.Add(nearestIndex);
+                }
+            }
+
+            return sorted; // ❌ 不再加 sorted[0]
+        }
+
+        public void DrawOpenPolyline(List<Point3d> lampPoints, string layerName)
+        {
+            var sortedPoints = SortPointsNearestPath(lampPoints);
+
+            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+
+            using (DocumentLock docLock = doc.LockDocument())
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                if (!lt.Has(layerName))
+                {
+                    lt.UpgradeOpen();
+                    LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
+                    lt.Add(newLayer);
+                    tr.AddNewlyCreatedDBObject(newLayer, true);
+                }
+
+                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                BlockTableRecord btr = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+                Polyline poly = new Polyline();
+                for (int i = 0; i < sortedPoints.Count; i++)
+                {
+                    poly.AddVertexAt(i, new Point2d(sortedPoints[i].X, sortedPoints[i].Y), 0, 0, 0);
+                }
+
+                // ❌ 不闭合 poly.Closed = true;
+                poly.Layer = layerName;
+                poly.Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 153);
+                poly.ConstantWidth = 35f;
+
+                btr.AppendEntity(poly);
+                tr.AddNewlyCreatedDBObject(poly, true);
+
+                tr.Commit();
+            }
+        }
+
+        public void DrawRectanglePolyline(List<int[]> rectPoints, string layerName = "Rect")
+        {
+            if (rectPoints == null || rectPoints.Count != 4)
+                throw new ArgumentException("必须提供四个矩形角点。");
+
+            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+
+            using (DocumentLock docLock = doc.LockDocument())
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                // 确保图层存在
+                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                if (!lt.Has(layerName))
+                {
+                    lt.UpgradeOpen();
+                    LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
+                    lt.Add(newLayer);
+                    tr.AddNewlyCreatedDBObject(newLayer, true);
+                }
+
+                // 获取模型空间
+                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+                // 创建闭合多段线
+                Polyline poly = new Polyline();
+                for (int i = 0; i < 4; i++)
+                {
+                    int[] pt = rectPoints[i];
+                    poly.AddVertexAt(i, new Point2d(pt[0], pt[1]), 0, 0, 0);
+                }
+                poly.Closed = true;
+                poly.Layer = layerName;
+                poly.Color = Autodesk.AutoCAD.Colors.Color.FromRgb(0, 255, 0); // 可自定义颜色
+                poly.ConstantWidth = 30f;
+
+                modelSpace.AppendEntity(poly);
+                tr.AddNewlyCreatedDBObject(poly, true);
                 tr.Commit();
             }
         }
