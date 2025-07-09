@@ -70,6 +70,37 @@ namespace CoDesignStudy.Cad.PlugIn
                 MessageBox.Show("测试", ex.Message);
             }
         }
+        public static void ShowModelReplyInPanel(string reply)
+        {
+            try
+            {
+                Document curDoc = CADApplication.DocumentManager.MdiActiveDocument;
+                if (curDoc == null)
+                {
+                    throw new System.Exception("当前未开启任何文件！");
+                }
+
+                // 初始化 PaletteSet（只初始化一次）
+                if (PrjExploreHelper.MainPaletteset == null)
+                {
+                    PrjExploreHelper.InitPalette();
+                }
+
+                // 初始化面板实例（只初始化一次）
+                if (Command.DlgInstance == null)
+                {
+                    Command.DlgInstance = new PaletteSetDlg();
+                    PrjExploreHelper.MainPaletteset.Add("测试界面", Command.DlgInstance);
+                }
+
+                // 展示模型输出内容
+                Command.DlgInstance.AppendMessageSync("AI", reply).Wait();
+            }
+            catch (System.Exception ex)
+            {
+                MessageBox.Show("显示面板失败", ex.Message);
+            }
+        }
 
         [CommandMethod("URL", CommandFlags.Session)]
         public static void URL()
@@ -533,18 +564,20 @@ namespace CoDesignStudy.Cad.PlugIn
             string ModelReplyJson = match.Groups[1].Value;
             Thinking_content = Regex.Replace(reply, @"```json\s*([\s\S]+?)\s*```", "").Trim();
 
-            if (Command.DlgInstance != null)
-            {
-                Task.Run(async () =>
-                {
-                    await Command.DlgInstance.AppendMessageSync("AI", Thinking_content);
-                });
-            }
+            //if (Command.DlgInstance != null)
+            //{
+            //    Task.Run(async () =>
+            //    {
+            //        await Command.DlgInstance.AppendMessageSync("AI", Thinking_content);
+            //    });
+            //}
 
             var obj = JsonConvert.DeserializeObject<LightingDesignResponse>(ModelReplyJson);
 
             // 保存灯具坐标点以供线路连接
             List<Point3d> insertPoints = new List<Point3d>();
+            string lightType = obj.lighting_design.fixture_type;
+
             // 插入灯具
             foreach (var point in obj.lighting_design.fixture_positions_mm)
             {
@@ -571,7 +604,7 @@ namespace CoDesignStudy.Cad.PlugIn
                         double z = 0;
                         double rotationDeg = socket.rotation_degrees;
 
-                        InsertBlockFromDwg(new Point3d(x, y, z), socketLayer, "插座", rotationDeg);
+                        InsertBlockFromDwg(new Point3d(x, y, z), socketLayer, "插座新", rotationDeg);
                     }
                 }
             }

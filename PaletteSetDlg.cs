@@ -99,7 +99,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 sendButton.Enabled = true;
             }
         }
-
+        // 流式输出
         public async Task<Control> AppendMessageAsync(string sender, string message, bool isStreaming = false, Action<Action<string>> setUpdateContent = null)
         {
             if (string.IsNullOrWhiteSpace(message) && !isStreaming) return null;
@@ -238,7 +238,7 @@ namespace CoDesignStudy.Cad.PlugIn
 
             return contentControl;
         }
-
+        // 非流式输出
         public Task<Control> AppendMessageSync(string sender, string message)
         {
             if (string.IsNullOrWhiteSpace(message)) return Task.FromResult<Control>(null);
@@ -343,7 +343,7 @@ namespace CoDesignStudy.Cad.PlugIn
             return Task.FromResult<Control>(contentControl);
         }
 
-
+        // 流式调用
         public async Task<string> GetAIResponse(string userMessage, Action<string> updateContent)
         {
             string apikey = "sk-8812dc6bd29845c897813c3cfeb83a34";
@@ -397,6 +397,7 @@ namespace CoDesignStudy.Cad.PlugIn
 
             return await tcs.Task;
         }
+        // 非流式调用
         public static async Task<string> CallLLMAsync(string prompt)
         {
             string apikey = "sk-8812dc6bd29845c897813c3cfeb83a34";
