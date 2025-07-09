@@ -13,6 +13,8 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using static LaunchDarkly.Logging.LogCapture;
+
 //using Autodesk.AutoCAD.Runtime;
 using CADApplication = Autodesk.AutoCAD.ApplicationServices.Application;
 
@@ -74,7 +76,27 @@ namespace CoDesignStudy.Cad.PlugIn
             this.Controls.Add(conversationPanel);
             this.Controls.Add(inputPanel);
         }
+        public async Task<string> SendAsync(string message)
+        {
+            if (string.IsNullOrWhiteSpace(message)) return null;
 
+            //await AppendMessageAsync("用户", message);
+
+
+            string fullAIResponse = "";
+
+            try
+            {
+                Action<string> updateFunc = null;
+                var aiContentControl = await AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
+                fullAIResponse = await GetAIResponse(message, updateFunc);
+            }
+            finally
+            {
+                
+            }
+            return fullAIResponse;
+        }
         private async void SendButton_Click(object sender, EventArgs e)
         {
             if (string.IsNullOrWhiteSpace(inputTextBox.Text))
