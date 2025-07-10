@@ -334,7 +334,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 public int fixture_count { get; set; }
                 public int power_w { get; set; }
                 public int mounting_height_mm { get; set; }
-                public List<List<int>> fixture_positions_mm { get; set; }
+                public List<List<double>> fixture_positions_mm { get; set; }
             }
 
             public class SocketPosition
@@ -351,7 +351,7 @@ namespace CoDesignStudy.Cad.PlugIn
 
 
         [CommandMethod("SELECT_RECT_PRINT", CommandFlags.Session)]
-        public void SelectEntitiesByRectangleAndPrintInfo()
+        public async void SelectEntitiesByRectangleAndPrintInfo()
         {
             Document doc = CADApplication.DocumentManager.MdiActiveDocument;
             Editor ed = doc.Editor;
@@ -554,94 +554,99 @@ namespace CoDesignStudy.Cad.PlugIn
             PaletteSetDlg dlg = new PaletteSetDlg();
             PrjExploreHelper.MainPaletteset.Add("test", dlg);
 
-            dlg.BeginInvoke((MethodInvoker)(async () =>
-            {
-                string FinalReply = await dlg.SendAsync(prompt);
-            }));
+            string reply = await dlg.SendAsync(prompt);  // ✅ 不阻塞主线程，等待结果
+
+
+            //dlg.BeginInvoke((MethodInvoker)(async () =>
+            //{
+            //    string FinalReply = await dlg.SendAsync(prompt);
+            //}));
+            //ed.WriteMessage($"reply:{FinalReply}");
+            //string finalReply = SendPromptAndWaitReply(dlg, prompt);
 
             //// 非流式调用模型
             //string reply = Task.Run(() => PaletteSetDlg.CallLLMAsync(prompt)).GetAwaiter().GetResult();
-            //string Thinking_content = "";
+            string Thinking_content = "";
 
-            //var match = Regex.Match(FinalReply, @"```json\s*([\s\S]+?)\s*```");
+            var match = Regex.Match(reply, @"```json\s*([\s\S]+?)\s*```");
 
-            //if (!match.Success)
-            //{
-            //    ed.WriteMessage("未找到JSON内容");
-            //    return;
-            //}
+            if (!match.Success)
+            {
+                ed.WriteMessage("未找到JSON内容");
+                return;
+            }
 
-            //string ModelReplyJson = match.Groups[1].Value;
-            //Thinking_content = Regex.Replace(FinalReply, @"```json\s*([\s\S]+?)\s*```", "").Trim();
+            string ModelReplyJson = match.Groups[1].Value;
+            Thinking_content = Regex.Replace(reply, @"```json\s*([\s\S]+?)\s*```", "").Trim();
 
-            //var obj = JsonConvert.DeserializeObject<LightingDesignResponse>(ModelReplyJson);
+            var obj = JsonConvert.DeserializeObject<LightingDesignResponse>(ModelReplyJson);
 
-            //// 保存灯具坐标点以供线路连接
-            //List<Point3d> insertPoints = new List<Point3d>();
-            //string lightType = obj.lighting_design.fixture_type;
+            // 保存灯具坐标点以供线路连接
+            List<Point3d> insertPoints = new List<Point3d>();
+            string lightType = obj.lighting_design.fixture_type;
 
-            //// 插入灯具
-            //foreach (var point in obj.lighting_design.fixture_positions_mm)
-            //{
-            //    string LightLayer = "照明";
-            //    if (point.Count >= 2)
-            //    {
-            //        double x = point[0];
-            //        double y = point[1];
-            //        double z = 0;
-            //        insertPoints.Add(new Point3d(x, y, z));
-            //        InsertBlockFromDwg(new Point3d(x, y, z), LightLayer, "gen_light");
-            //    }
-            //}
-            //// 插入插座
-            //if (obj.socket_positions != null)
-            //{
-            //    string socketLayer = "插座"; // 替换为你项目中的图层名
-            //    foreach (var socket in obj.socket_positions)
-            //    {
-            //        if (socket.position_mm.Count >= 2)
-            //        {
-            //            double x = socket.position_mm[0];
-            //            double y = socket.position_mm[1];
-            //            double z = 0;
-            //            double rotationDeg = socket.rotation_degrees;
+            // 插入灯具
+            foreach (var point in obj.lighting_design.fixture_positions_mm)
+            {
+                string LightLayer = "照明";
+                if (point.Count >= 2)
+                {
+                    double x = point[0];
+                    double y = point[1];
+                    double z = 0;
+                    insertPoints.Add(new Point3d(x, y, z));
+                    InsertBlockFromDwg(new Point3d(x, y, z), LightLayer, "gen_light");
+                }
+            }
+            // 插入插座
+            if (obj.socket_positions != null)
+            {
+                string socketLayer = "插座"; // 替换为你项目中的图层名
+                foreach (var socket in obj.socket_positions)
+                {
+                    if (socket.position_mm.Count >= 2)
+                    {
+                        double x = socket.position_mm[0];
+                        double y = socket.position_mm[1];
+                        double z = 0;
+                        double rotationDeg = socket.rotation_degrees;
 
-            //            InsertBlockFromDwg(new Point3d(x, y, z), socketLayer, "插座新", rotationDeg);
-            //        }
-            //    }
-            //}
+                        InsertBlockFromDwg(new Point3d(x, y, z), socketLayer, "插座新", rotationDeg);
+                    }
+                }
+            }
 
-            //// 插入开关
-            //if (obj.switch_position?.position_mm != null && obj.switch_position.position_mm.Count >= 2)
-            //{
-            //    string switchLayer = "开关"; // 替换为你项目中的图层名
-            //    double x = obj.switch_position.position_mm[0];
-            //    double y = obj.switch_position.position_mm[1];
-            //    double z = 0;
-            //    InsertBlockFromDwg(new Point3d(x, y, z), switchLayer, "开关");
-            //}
-            //// 生成线路
-            //DrawOpenPolyline(insertPoints, "照明-WIRE");
+            // 插入开关
+            if (obj.switch_position?.position_mm != null && obj.switch_position.position_mm.Count >= 2)
+            {
+                string switchLayer = "开关"; // 替换为你项目中的图层名
+                double x = obj.switch_position.position_mm[0];
+                double y = obj.switch_position.position_mm[1];
+                double z = 0;
+                InsertBlockFromDwg(new Point3d(x, y, z), switchLayer, "开关");
+            }
+            // 生成线路
+            DrawOpenPolyline(insertPoints, "照明-WIRE");
 
-            //// 输出结构化JSON
-            //string json = Newtonsoft.Json.JsonConvert.SerializeObject(result, Newtonsoft.Json.Formatting.Indented);
-            //ed.WriteMessage($"\n{json}");
-            //ed.WriteMessage($"\n灯具类型：{obj.lighting_design.fixture_type}");
-            //ed.WriteMessage($"\n灯具数量：{obj.lighting_design.fixture_count}");
-            //ed.WriteMessage($"\n灯具坐标：{obj.lighting_design.fixture_positions_mm}");
-            //ed.WriteMessage($"\n推理过程：{Thinking_content}");
+            // 输出结构化JSON
+            string json = Newtonsoft.Json.JsonConvert.SerializeObject(result, Newtonsoft.Json.Formatting.Indented);
+            ed.WriteMessage($"\n{json}");
+            ed.WriteMessage($"\n灯具类型：{obj.lighting_design.fixture_type}");
+            ed.WriteMessage($"\n灯具数量：{obj.lighting_design.fixture_count}");
+            ed.WriteMessage($"\n灯具坐标：{obj.lighting_design.fixture_positions_mm}");
+            ed.WriteMessage($"\n推理过程：{Thinking_content}");
 
-            //// 导出到文件
-            //try
-            //{
-            //    string filePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "cad_rect_result.json");
-            //    File.WriteAllText(filePath, json, System.Text.Encoding.UTF8);
-            //    ed.WriteMessage($"\n已导出到: {filePath}");
-            //}
-            //catch (System.Exception ex)
-            //{
-            //    ed.WriteMessage($"\n导出JSON文件失败: {ex.Message}");
-            //}
+            // 导出到文件
+            try
+            {
+                string filePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "cad_rect_result.json");
+                File.WriteAllText(filePath, json, System.Text.Encoding.UTF8);
+                ed.WriteMessage($"\n已导出到: {filePath}");
+            }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage($"\n导出JSON文件失败: {ex.Message}");
+            }
         }
         public void InsertBlockFromDwg(Point3d insertPoint, string targetLayer, string blockName, double rotationDegrees = 0)
         {
@@ -952,7 +957,26 @@ namespace CoDesignStudy.Cad.PlugIn
                 tr.Commit();
             }
         }
+        public string SendPromptAndWaitReply(PaletteSetDlg dlg, string prompt)
+        {
+            var tcs = new TaskCompletionSource<string>();
 
+            dlg.BeginInvoke((MethodInvoker)(async () =>
+            {
+                try
+                {
+                    string reply = await dlg.SendAsync(prompt);
+                    tcs.TrySetResult(reply);
+                }
+                catch (System.Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+            }));
+
+            // 同步等待最终返回结果（不要在 UI 线程中调用这句！）
+            return tcs.Task.GetAwaiter().GetResult();
+        }
 
         private async Task SelectEntitiesByRectangleAndPrintInfoAsync(string prompt, PaletteSetDlg dlg)
         {

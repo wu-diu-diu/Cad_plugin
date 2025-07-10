@@ -90,6 +90,12 @@ namespace CoDesignStudy.Cad.PlugIn
                 Action<string> updateFunc = null;
                 var aiContentControl = await AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
                 fullAIResponse = await GetAIResponse(message, updateFunc);
+                System.IO.File.AppendAllText("C:\\ai_debug_log.txt", $"[SendAsync DONE] {fullAIResponse}\n");
+            }
+            catch (Exception ex)
+            {
+                System.IO.File.AppendAllText("C:\\ai_debug_log.txt", $"[SendAsync ERROR] {ex.Message}\n");
+                throw;
             }
             finally
             {
