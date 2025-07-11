@@ -41,7 +41,7 @@ namespace CoDesignStudy.Cad.PlugIn
 
                 double width = (int)XCADApp.MainWindow.DeviceIndependentSize.Width;
                 double height = (int)XCADApp.MainWindow.DeviceIndependentSize.Height;
-                int palettesetWidth = Convert.ToInt32(width * 0.25);  // 侧边栏的宽度
+                int palettesetWidth = Convert.ToInt32(width * 0.5);  // 侧边栏的宽度
                 int palettesetHeight = Convert.ToInt32(height * 0.5);  // 侧边栏的高度
                 MainPaletteset.Size = new System.Drawing.Size(palettesetWidth, palettesetHeight);
 

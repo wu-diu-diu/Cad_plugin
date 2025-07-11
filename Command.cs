@@ -6,6 +6,7 @@ using Autodesk.AutoCAD.Runtime;
 using Autodesk.AutoCAD.Windows;
 using Autodesk.Windows;
 using BoundingRectangle;
+using Markdig;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -595,7 +596,18 @@ namespace CoDesignStudy.Cad.PlugIn
                     double y = point[1];
                     double z = 0;
                     insertPoints.Add(new Point3d(x, y, z));
-                    InsertBlockFromDwg(new Point3d(x, y, z), LightLayer, "gen_light");
+
+                    string lightName;
+                    if (lightType.Contains("吸顶"))
+                        lightName = "感应式吸顶灯";
+                    else if (lightType.Contains("防爆"))
+                        lightName = "防爆灯";
+                    else if (lightType.Contains("面板"))
+                        lightName = "双管荧光灯";
+                    else
+                        lightName = "gen_light";
+
+                    InsertBlockFromDwg(new Point3d(x, y, z), LightLayer, lightName);
                 }
             }
             // 插入插座
@@ -984,6 +996,16 @@ namespace CoDesignStudy.Cad.PlugIn
             // 等待 AI 控件初始化并获得更新函数
             var aiContentControl = await dlg.AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
             await dlg.GetAIResponse(prompt, updateFunc);
+        }
+        [CommandMethod("MM", CommandFlags.Session)]
+        public void TestMarkdig()
+        {
+            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
+            Editor ed = doc.Editor;
+            Database db = doc.Database;
+            var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+            var result = Markdown.ToHtml("| 灯具类型 | 个数 | 瓦数 | \r\n|---------|-----|-----|\r\n | 吸顶灯 | 2 | 20W | | 防爆灯 | 3 | 50W | | 荧光灯 | 5 | 60W |", pipeline);
+            ed.WriteMessage($"{result}");   // prints: <p>This is a text with some <em>emphasis</em></p>
         }
         #endregion
     }

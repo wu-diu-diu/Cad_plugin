@@ -25,6 +25,14 @@ namespace CoDesignStudy.Cad.PlugIn
         private Panel conversationPanel;
         private TextBox inputTextBox;
         private Button sendButton;
+        private static readonly int fontsize = 14;
+        private static readonly string htmlsize = $"{fontsize}pt";
+
+        // 自动滚动相关变量
+        private bool isAutoScrollEnabled = true;
+        private int scrollThreshold = 50; // 距离底部50px内认为在底部
+        private DateTime lastUserScrollTime = DateTime.MinValue;
+        private Control currentAIControl = null; // 当前正在更新的AI控件
 
         public PaletteSetDlg()
         {
@@ -45,6 +53,8 @@ namespace CoDesignStudy.Cad.PlugIn
                 FlowDirection = System.Windows.Forms.FlowDirection.TopDown,
                 WrapContents = false
             };
+            conversationPanel.Scroll += ConversationPanel_Scroll;
+            conversationPanel.MouseWheel += ConversationPanel_MouseWheel;
             conversationPanel.Resize += ConversationPanel_Resize;
 
             // 输入区域
@@ -76,6 +86,111 @@ namespace CoDesignStudy.Cad.PlugIn
             this.Controls.Add(conversationPanel);
             this.Controls.Add(inputPanel);
         }
+        #region 滚动检测和控制
+
+        /// <summary>
+        /// 检测是否接近底部
+        /// </summary>
+        private bool IsNearBottom()
+        {
+            if (conversationPanel.Controls.Count == 0) return true;
+
+            var verticalScroll = conversationPanel.VerticalScroll;
+            int currentScrollPosition = verticalScroll.Value;
+            int maxScrollPosition = verticalScroll.Maximum - conversationPanel.Height;
+
+            return (maxScrollPosition - currentScrollPosition) <= scrollThreshold;
+        }
+        /// <summary>
+        /// 滚动事件处理
+        /// </summary>
+        private void ConversationPanel_Scroll(object sender, ScrollEventArgs e)
+        {
+            // 记录用户手动滚动的时间
+            if (e.Type == ScrollEventType.ThumbTrack || e.Type == ScrollEventType.ThumbPosition)
+            {
+                lastUserScrollTime = DateTime.Now;
+
+                // 如果用户滚动到底部，重新启用自动滚动
+                if (IsNearBottom())
+                {
+                    isAutoScrollEnabled = true;
+                }
+                else
+                {
+                    // 如果用户向上滚动，暂时禁用自动滚动
+                    isAutoScrollEnabled = false;
+                }
+            }
+        }
+        /// <summary>
+        /// 鼠标滚轮事件处理
+        /// </summary>
+        private void ConversationPanel_MouseWheel(object sender, MouseEventArgs e)
+        {
+            lastUserScrollTime = DateTime.Now;
+
+            // 检查滚动方向和位置
+            if (e.Delta < 0) // 向下滚动
+            {
+                if (IsNearBottom())
+                {
+                    isAutoScrollEnabled = true;
+                }
+            }
+            else // 向上滚动
+            {
+                isAutoScrollEnabled = false;
+            }
+        }
+        /// <summary>
+        /// 智能自动滚动
+        /// </summary>
+        private void SmartAutoScroll(Control targetControl = null)
+        {
+            if (!isAutoScrollEnabled) return;
+
+            // 如果用户刚刚手动滚动（1秒内），则不自动滚动
+            if ((DateTime.Now - lastUserScrollTime).TotalMilliseconds < 1000)
+            {
+                return;
+            }
+
+            try
+            {
+                if (targetControl != null)
+                {
+                    // 滚动到指定控件
+                    conversationPanel.ScrollControlIntoView(targetControl);
+                }
+                else
+                {
+                    // 滚动到底部
+                    if (conversationPanel.Controls.Count > 0)
+                    {
+                        var lastControl = conversationPanel.Controls[conversationPanel.Controls.Count - 1];
+                        conversationPanel.ScrollControlIntoView(lastControl);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Auto scroll error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 强制滚动到底部（新消息时使用）
+        /// </summary>
+        private void ScrollToBottom()
+        {
+            isAutoScrollEnabled = true;
+            SmartAutoScroll();
+        }
+
+        #endregion
+
+        #region 消息处理
         public async Task<string> SendAsync(string message)
         {
             if (string.IsNullOrWhiteSpace(message)) return null;
@@ -90,7 +205,6 @@ namespace CoDesignStudy.Cad.PlugIn
                 Action<string> updateFunc = null;
                 var aiContentControl = await AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
                 fullAIResponse = await GetAIResponse(message, updateFunc);
-                System.IO.File.AppendAllText("C:\\ai_debug_log.txt", $"[SendAsync DONE] {fullAIResponse}\n");
             }
             catch (Exception ex)
             {
@@ -112,6 +226,7 @@ namespace CoDesignStudy.Cad.PlugIn
             inputTextBox.Clear();
 
             await AppendMessageAsync("用户", userMessage);
+            ScrollToBottom();
 
             sendButton.Enabled = false;
 
@@ -120,18 +235,20 @@ namespace CoDesignStudy.Cad.PlugIn
                 Action<string> updateFunc = null;
                 // 等待 AI 控件初始化并获得更新函数
                 var aiContentControl = await AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
+                // 设置当前AI控件
+                currentAIControl = aiContentControl;
                 await GetAIResponse(userMessage, updateFunc);
             }
             finally
             {
                 sendButton.Enabled = true;
+                currentAIControl = null;
             }
         }
         // 流式输出
         public async Task<Control> AppendMessageAsync(string sender, string message, bool isStreaming = false, Action<Action<string>> setUpdateContent = null)
         {
             if (string.IsNullOrWhiteSpace(message) && !isStreaming) return null;
-
             Control contentControl;
 
             if (sender == "AI")
@@ -140,77 +257,352 @@ namespace CoDesignStudy.Cad.PlugIn
                 {
                     Width = conversationPanel.Width - 150,
                     Margin = new Padding(0),
-                    Height = 1,
+                    Height = 50,
                     DefaultBackgroundColor = Color.White
                 };
 
                 await webView.EnsureCoreWebView2Async();
-
                 if (webView.CoreWebView2 != null)
                 {
+                    // 添加节流变量
+                    DateTime lastScrollTime = DateTime.MinValue;
+                    int lastHeight = 0;
+
                     webView.CoreWebView2.WebMessageReceived += (s, a) =>
                     {
                         if (int.TryParse(a.WebMessageAsJson, out int height))
                         {
-                            Action update = () =>
+                            // 只有高度变化显著时才更新
+                            if (Math.Abs(height - lastHeight) > 10)
                             {
-                                webView.Height = Math.Max(height, 1);
-                                // ⭐ 关键：更新高度后再滚动
-                                conversationPanel.ScrollControlIntoView(webView);
-                            };
+                                lastHeight = height;
+                                Action update = () =>
+                                {
+                                    webView.Height = Math.Max(height, 50);
 
-                            if (webView.InvokeRequired)
-                                webView.Invoke(update);
-                            else
-                                update();
+                                    // 节流滚动：限制滚动频率
+                                    var now = DateTime.Now;
+                                    if ((now - lastScrollTime).TotalMilliseconds > 150) // 150ms节流
+                                    {
+                                        lastScrollTime = now;
+
+                                        // 延迟滚动，让界面有时间更新
+                                        Task.Delay(30).ContinueWith(_ =>
+                                        {
+                                            if (webView.IsHandleCreated && !webView.IsDisposed)
+                                            {
+                                                webView.Invoke(new Action(() =>
+                                                {
+                                                    // 只有当前WebView是正在更新的AI控件时才滚动
+                                                    if (currentAIControl == webView)
+                                                    {
+                                                        SmartAutoScroll(webView);
+                                                    }
+                                                }));
+                                            }
+                                        });
+                                    }
+                                };
+
+                                if (webView.InvokeRequired)
+                                    webView.Invoke(update);
+                                else
+                                    update();
+                            }
                         }
                     };
 
-                    string html = Markdig.Markdown.ToHtml(message ?? "");
-                    string doc = $"<html><head><script>window.MathJax={{tex:{{inlineMath:[['$','$'],['\\\\(','\\\\)']],displayMath:[['$$','$$'],['\\\\[','\\\\]']]}},svg:{{fontCache:'global'}}}};</script><script src='https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js'></script></head><body id='body' style='font-family:微软雅黑;font-size:10pt;background-color:#FFFFFF;margin:0;padding:0;'>{html}<script>function setContent(html){{const body=document.getElementById('body');body.innerHTML=html;if(window.MathJax){{MathJax.typesetPromise([body]).then(()=>{{setTimeout(()=>{{const height=Math.max(body.scrollHeight,document.documentElement.scrollHeight);window.chrome.webview.postMessage(height);}},100);}});}}else{{setTimeout(()=>{{const height=Math.max(body.scrollHeight,document.documentElement.scrollHeight);window.chrome.webview.postMessage(height);}},100);}}const resizeObserver=new ResizeObserver(()=>{{const newHeight=Math.max(body.scrollHeight,document.documentElement.scrollHeight);window.chrome.webview.postMessage(newHeight);}});resizeObserver.observe(body);}}if(window.MathJax)MathJax.typesetPromise();const initialHeight=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);window.chrome.webview.postMessage(initialHeight);</script></body></html>";
+                    // 优化HTML结构，减少重排
+                    var pipeline = new MarkdownPipelineBuilder()
+                                        .UseAdvancedExtensions()  // ✅ 启用 GFM 表格等支持
+                                        .Build();
+
+                    string html = Markdown.ToHtml(message ?? "", pipeline);
+                    string doc = $@"
+<html>
+<head>
+    <script>
+        window.MathJax = {{
+            tex: {{
+                inlineMath: [['$','$'], ['\\(','\\)']],
+                displayMath: [['$$','$$'], ['\\[','\\]']]
+            }},
+            svg: {{
+                fontCache: 'global'
+            }}
+        }};
+    </script>
+    <script src='https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js'></script>
+    <style>
+        html, body {{
+            margin: 0;
+            padding: 0;
+            font-family: 微软雅黑;
+            font-size: 14px;
+            background-color: #FFFFFF;
+            line-height: 1.6;
+            word-wrap: break-word;
+            /* ✅ 关键：禁用滚动条 */
+            overflow: hidden !important;
+            overflow-x: hidden !important;
+            overflow-y: hidden !important;
+        }}
+        .content {{
+            padding: 8px;
+            min-height: 40px; /* ✅ 设置最小高度 */
+            /* ✅ 确保内容不会溢出 */
+            overflow: hidden;
+            word-break: break-word;
+        }}
+        /* ✅ 新增：表格样式 - 关键修复 */
+        table {{
+            border-collapse: collapse;
+            width: 100%;
+            max-width: 100%;
+            margin: 10px 0;
+            background-color: #fff;
+            /* ✅ 防止表格溢出 */
+            table-layout: fixed;
+            word-wrap: break-word;
+        }}
+        
+        th, td {{
+            border: 1px solid #ddd;
+            padding: 8px 12px;
+            text-align: left;
+            vertical-align: top;
+            /* ✅ 确保单元格内容不溢出 */
+            overflow: hidden;
+            word-break: break-word;
+            hyphens: auto;
+        }}
+        
+        th {{
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }}
+        
+        /* ✅ 响应式表格 */
+        @media screen and (max-width: 600px) {{
+            table {{
+                font-size: 12px;
+            }}
+            th, td {{
+                padding: 6px 8px;
+            }}
+        }}
+        
+        /* ✅ 处理长内容 */
+        .content table {{
+            overflow-wrap: break-word;
+            word-wrap: break-word;
+        }}
+        /* ✅ 隐藏所有可能的滚动条 */
+        ::-webkit-scrollbar {{
+            display: none !important;
+            width: 0 !important;
+            height: 0 !important;
+        }}
+        * {{
+            scrollbar-width: none !important;
+            -ms-overflow-style: none !important;
+        }}
+    </style>
+</head>
+<body>
+    <div id='content' class='content'>{html}</div>
+    <script>
+        let updateTimer = null;
+        let isUpdating = false;
+        let lastReportedHeight = 0;
+        
+        function debounceHeightUpdate() {{
+            if (updateTimer) {{
+                clearTimeout(updateTimer);
+            }}
+            updateTimer = setTimeout(() => {{
+                const content = document.getElementById('content');
+                
+                // ✅ 更准确的高度计算
+                const height = Math.max(
+                    content.scrollHeight + 16, // padding
+                    content.offsetHeight + 16,
+                    document.documentElement.scrollHeight,
+                    document.body.scrollHeight,
+                    50 // 最小高度
+                );
+                
+                // ✅ 避免频繁发送相同高度
+                if (Math.abs(height - lastReportedHeight) > 3) {{
+                    lastReportedHeight = height;
+                    window.chrome.webview.postMessage(height);
+                }}
+            }}, 30); // 减少防抖时间，更快响应
+        }}
+        
+        function setContent(html) {{
+            if (isUpdating) return;
+            isUpdating = true;
+            
+            const content = document.getElementById('content');
+            
+            // ✅ 使用更高效的DOM更新方式
+            requestAnimationFrame(() => {{
+                try {{
+                    content.innerHTML = html;
+                    
+                    // ✅ 立即计算并报告高度，避免滚动条闪现
+                    const immediateHeight = Math.max(
+                        content.scrollHeight + 16,
+                        content.offsetHeight + 16,
+                        50
+                    );
+                    
+                    if (Math.abs(immediateHeight - lastReportedHeight) > 3) {{
+                        lastReportedHeight = immediateHeight;
+                        window.chrome.webview.postMessage(immediateHeight);
+                    }}
+                    
+                    if (window.MathJax) {{
+                        MathJax.typesetPromise([content]).then(() => {{
+                            debounceHeightUpdate();
+                            isUpdating = false;
+                        }}).catch(() => {{
+                            debounceHeightUpdate();
+                            isUpdating = false;
+                        }});
+                    }} else {{
+                        debounceHeightUpdate();
+                        isUpdating = false;
+                    }}
+                }} catch (e) {{
+                    console.error('Content update error:', e);
+                    isUpdating = false;
+                }}
+            }});
+        }}
+        
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {{
+            if (window.MathJax) {{
+                MathJax.typesetPromise().then(() => {{
+                    debounceHeightUpdate();
+                }});
+            }} else {{
+                debounceHeightUpdate();
+            }}
+        }});
+        
+        // ✅ 优化的观察器，减少触发频率
+        const observer = new MutationObserver((mutations) => {{
+            let shouldUpdate = false;
+            mutations.forEach(mutation => {{
+                if (mutation.type === 'childList' || 
+                    (mutation.type === 'characterData' && mutation.target.textContent.length > 0)) {{
+                    shouldUpdate = true;
+                }}
+            }});
+            
+            if (shouldUpdate) {{
+                debounceHeightUpdate();
+            }}
+        }});
+        
+        observer.observe(document.getElementById('content'), {{
+            childList: true,
+            subtree: true,
+            characterData: true
+        }});
+        
+        // ✅ 页面加载完成后立即报告高度
+        window.addEventListener('load', function() {{
+            debounceHeightUpdate();
+        }});
+    </script>
+</body>
+</html>";
+
                     webView.CoreWebView2.NavigateToString(doc);
 
                     if (setUpdateContent != null)
                     {
+                        // 添加更新节流
+                        DateTime lastUpdateTime = DateTime.MinValue;
+                        string lastContent = "";
+
                         Action<string> updateContent = (newContent) =>
                         {
-                            string htmlUpdate = Markdig.Markdown.ToHtml(newContent).Replace("`", "\\`");
+                            // 内容去重
+                            if (newContent == lastContent) return;
+                            lastContent = newContent;
 
-                            if (webView.InvokeRequired)
+                            // 更新频率控制
+                            var now = DateTime.Now;
+                            if ((now - lastUpdateTime).TotalMilliseconds < 100) // 100ms内不重复更新
                             {
-                                webView.Invoke(new Action(() =>
-                                {
-                                    webView.CoreWebView2.ExecuteScriptAsync($"setContent(`{htmlUpdate}`);");
-                                    conversationPanel.ScrollControlIntoView(webView);
-                                    // ❌ 不在这里滚动
-                                }));
+                                return;
                             }
-                            else
+                            lastUpdateTime = now;
+
+                            try
                             {
-                                webView.CoreWebView2.ExecuteScriptAsync($"setContent(`{htmlUpdate}`);");
-                                conversationPanel.ScrollControlIntoView(webView);
-                                // ❌ 不在这里滚动
+                                string htmlUpdate = Markdig.Markdown.ToHtml(newContent)
+                                    .Replace("`", "\\`")
+                                    .Replace("\\", "\\\\")
+                                    .Replace("'", "\\'")
+                                    .Replace("\r\n", "\\n")
+                                    .Replace("\n", "\\n");
+
+                                if (webView.IsHandleCreated && !webView.IsDisposed)
+                                {
+                                    if (webView.InvokeRequired)
+                                    {
+                                        webView.Invoke(new Action(() =>
+                                        {
+                                            webView.CoreWebView2?.ExecuteScriptAsync($"setContent(`{htmlUpdate}`);");
+                                        }));
+                                    }
+                                    else
+                                    {
+                                        webView.CoreWebView2?.ExecuteScriptAsync($"setContent(`{htmlUpdate}`);");
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                // 记录错误但不中断流程
+                                System.Diagnostics.Debug.WriteLine($"WebView update error: {ex.Message}");
                             }
                         };
 
                         setUpdateContent(updateContent);
                     }
                 }
-
+                conversationPanel.Controls.Add(webView);
                 contentControl = webView;
             }
             else
             {
-                contentControl = new Label
+                contentControl = new TextBox
                 {
                     Text = message,
-                    AutoSize = true,
-                    Font = new System.Drawing.Font("微软雅黑", 10),
+                    Font = new System.Drawing.Font("微软雅黑", fontsize),
                     MaximumSize = new Size(conversationPanel.Width - 150, 0),
                     Padding = new Padding(10),
                     BackColor = Color.LightBlue,
-                    Margin = new Padding(5)
+                    Margin = new Padding(5),
+                    BorderStyle = BorderStyle.None, // 看起来像Label
+                    ReadOnly = true,                // 只读
+                    Multiline = true,              // 支持多行
+                    ScrollBars = ScrollBars.None,  // 不显示滚动条
+                    TabStop = false,               // 不参与Tab导航
+                    Cursor = Cursors.IBeam         // 文本光标
                 };
+                Size textSize = TextRenderer.MeasureText(message, contentControl.Font, contentControl.MaximumSize, TextFormatFlags.WordBreak);
+                contentControl.Height = textSize.Height + 10; // +10 是额外填充防止被裁切
+                // 设置实际宽度和高度
+contentControl.Width = Math.Min(textSize.Width + contentControl.Padding.Horizontal, conversationPanel.Width - 150);
+contentControl.Height = textSize.Height + contentControl.Padding.Vertical;
             }
 
             // 头像
@@ -266,6 +658,17 @@ namespace CoDesignStudy.Cad.PlugIn
 
             return contentControl;
         }
+        private void ConversationPanel_Resize(object sender, EventArgs e)
+        {
+            // 面板大小改变时，如果在底部则保持在底部
+            if (isAutoScrollEnabled && IsNearBottom())
+            {
+                Task.Delay(100).ContinueWith(_ =>
+                {
+                    this.Invoke(new Action(() => SmartAutoScroll()));
+                });
+            }
+        }
         // 非流式输出
         public Task<Control> AppendMessageSync(string sender, string message)
         {
@@ -291,7 +694,7 @@ namespace CoDesignStudy.Cad.PlugIn
 <html><head>
 <script src='https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js'></script>
 </head>
-<body style='font-family:微软雅黑;font-size:10pt;background-color:#FFFFFF;margin:0;padding:0;'>
+<body style='font-family:微软雅黑;font-size:{htmlsize};background-color:#FFFFFF;margin:0;padding:0;'>
 {html}
 </body></html>";
 
@@ -304,7 +707,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 {
                     Text = message,
                     AutoSize = true,
-                    Font = new System.Drawing.Font("微软雅黑", 10),
+                    Font = new System.Drawing.Font("微软雅黑", fontsize),
                     MaximumSize = new Size(conversationPanel.Width - 150, 0),
                     Padding = new Padding(10),
                     BackColor = Color.LightBlue,
@@ -370,6 +773,7 @@ namespace CoDesignStudy.Cad.PlugIn
 
             return Task.FromResult<Control>(contentControl);
         }
+        #endregion
 
         // 流式调用
         public async Task<string> GetAIResponse(string userMessage, Action<string> updateContent)
@@ -387,7 +791,7 @@ namespace CoDesignStudy.Cad.PlugIn
             new ChatRequest.MessagesType
             {
                 Role = ChatRequest.RoleEnum.System,
-                Content = "你的名字是\"电气设计助手\"，是一个电气设计领域的AutoCAD助手，请回答有关电气设计领域的CAD操作的问题或者相关的电气知识"
+                Content = "你的名字是\"电气设计助手\"，是一个电气设计领域的AutoCAD助手，请回答有关电气设计领域的问题并返回原始的Markdown格式"
             },
             new ChatRequest.MessagesType
             {
@@ -470,23 +874,6 @@ namespace CoDesignStudy.Cad.PlugIn
         {
             conversationPanel.Controls.Clear();
         }
-
-        private void ConversationPanel_Resize(object sender, EventArgs e)
-        {
-            // 重新调整 Label 最大宽度
-            foreach (Control ctrl in conversationPanel.Controls)
-            {
-                if (ctrl is Panel panel)
-                {
-                    foreach (Control child in panel.Controls)
-                    {
-                        if (child is Label lbl)
-                        {
-                            lbl.MaximumSize = new Size(conversationPanel.Width - 100, 0);
-                        }
-                    }
-                }
-            }
-        }
+  
     }
 }
