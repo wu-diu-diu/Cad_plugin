@@ -10,6 +10,7 @@ using Markdig;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -18,6 +19,8 @@ using System.Windows.Forms;
 using System.Xml.Linq;
 using System.Xml.Schema;
 using static System.Net.Mime.MediaTypeNames;
+using OfficeOpenXml;
+using OfficeOpenXml.Style;
 using CADApplication = Autodesk.AutoCAD.ApplicationServices.Application;
 
 [assembly: ExtensionApplication(typeof(CoDesignStudy.Cad.PlugIn.Command))]
@@ -34,6 +37,8 @@ namespace CoDesignStudy.Cad.PlugIn
         public string FinalPrompt;
         public string FinalReply;
         public static PaletteSetDlg DlgInstance;
+        Dictionary<string, (int Count, string Info)> componentStats = new Dictionary<string, (int, string)>();
+
         #endregion
 
         #region 初始化
@@ -211,6 +216,15 @@ namespace CoDesignStudy.Cad.PlugIn
             // 执行 AutoLISP 代码
             doc.SendStringToExecute(lisp, true, false, false);
         }
+        [CommandMethod("EE", CommandFlags.Session)]
+        public void ExportExcel()
+        {
+            var statsList = componentStats
+                        .Select(kv => (Type: kv.Key, Count: kv.Value.Count, Info: kv.Value.Info))
+                        .ToList();
+
+            ExportStatisticsToExcel(statsList, @"D:\最终统计.xlsx");
+        }
 
         [CommandMethod("PRINT_ALL_BLOCK_NAMES", CommandFlags.Session)]
         public void PrintAllBlockNames()
@@ -336,17 +350,22 @@ namespace CoDesignStudy.Cad.PlugIn
                 public int power_w { get; set; }
                 public int mounting_height_mm { get; set; }
                 public List<List<double>> fixture_positions_mm { get; set; }
+                public List<List<List<double>>> fixture_wiring_lines_mm { get; set; }
+                public List<List<List<double>>> power_outlet_connection_line_mm { get; set; }
+
             }
 
             public class SocketPosition
             {
                 public List<int> position_mm { get; set; }
                 public int rotation_degrees { get; set; }
+                public int fixture_count { get; set; }
             }
 
             public class SwitchPosition
             {
                 public List<int> position_mm { get; set; }
+                public int fixture_count { get; set; }
             }
         }
 
@@ -380,6 +399,11 @@ namespace CoDesignStudy.Cad.PlugIn
             PromptPointResult ppr2 = ed.GetCorner(pco);
             if (ppr2.Status != PromptStatus.OK) return;
 
+            // 1. 框选完成后，获取鼠标位置
+            System.Drawing.Point mousePos = System.Windows.Forms.Control.MousePosition;
+
+            // 2. 弹出输入框（可用InputBox或自定义窗体）
+            string instruction = ShowInputBoxAt(mousePos, "请输入指令：");
             Point3d pt1 = ppr1.Value;
             Point3d pt2 = ppr2.Value;
 
@@ -508,6 +532,8 @@ namespace CoDesignStudy.Cad.PlugIn
                 .Select(p => new double[] { p.X, p.Y }).ToList();
                 result.RectPoints = rectPoints;
             }
+
+
             foreach (string doorName in doorNames)
             {
                 if (result.Blocks.ContainsKey(doorName))
@@ -549,14 +575,12 @@ namespace CoDesignStudy.Cad.PlugIn
 
             string CaculatePromptTemplate = Prompt.CaculatePrompt2;
             // 生成完整Prompt
-            string prompt = Prompt.GetLightingPrompt(roomType, coordinatesStr, doorPositionStr);
+            string prompt = Prompt.GetLightingPrompt(roomType, coordinatesStr, doorPositionStr, instruction);
 
-            PrjExploreHelper.InitPalette();
-            PaletteSetDlg dlg = new PaletteSetDlg();
-            PrjExploreHelper.MainPaletteset.Add("test", dlg);
-
-            string reply = await dlg.SendAsync(prompt);  // ✅ 不阻塞主线程，等待结果
-
+            //PrjExploreHelper.InitPalette();
+            //PaletteSetDlg dlg = new PaletteSetDlg();
+            //PrjExploreHelper.MainPaletteset.Add("test", dlg);
+            string reply = await DlgInstance.SendAsync(prompt, instruction);
 
             //dlg.BeginInvoke((MethodInvoker)(async () =>
             //{
@@ -585,11 +609,20 @@ namespace CoDesignStudy.Cad.PlugIn
             // 保存灯具坐标点以供线路连接
             List<Point3d> insertPoints = new List<Point3d>();
             string lightType = obj.lighting_design.fixture_type;
-
+            string lightName = "";
+            if (lightType.Contains("吸顶"))
+                lightName = "感应式吸顶灯";
+            else if (lightType.Contains("防爆"))
+                lightName = "防爆灯";
+            else if (lightType.Contains("面板") || lightType.Contains("荧光"))
+                lightName = "双管荧光灯";
+            else
+                lightName = "gen_light";
+            string LightLayer = "照明";
+            int lightCount = obj.lighting_design.fixture_count;
             // 插入灯具
             foreach (var point in obj.lighting_design.fixture_positions_mm)
             {
-                string LightLayer = "照明";
                 if (point.Count >= 2)
                 {
                     double x = point[0];
@@ -597,20 +630,44 @@ namespace CoDesignStudy.Cad.PlugIn
                     double z = 0;
                     insertPoints.Add(new Point3d(x, y, z));
 
-                    string lightName;
-                    if (lightType.Contains("吸顶"))
-                        lightName = "感应式吸顶灯";
-                    else if (lightType.Contains("防爆"))
-                        lightName = "防爆灯";
-                    else if (lightType.Contains("面板"))
-                        lightName = "双管荧光灯";
-                    else
-                        lightName = "gen_light";
-
                     InsertBlockFromDwg(new Point3d(x, y, z), LightLayer, lightName);
+                    // 统计信息
+                }
+            }
+            AddOrUpdateComponent(lightName, lightCount, obj.lighting_design.power_w.ToString());
+            // 绘制灯具之间的连线
+            string wiringLayer = "照明连线";
+            foreach (var line in obj.lighting_design.fixture_wiring_lines_mm)
+            {
+                if (line.Count >= 2)
+                {
+                    var start = line[0];
+                    var end = line[1];
+                    if (start.Count >= 2 && end.Count >= 2)
+                    {
+                        Point3d p1 = new Point3d(start[0], start[1], 0);
+                        Point3d p2 = new Point3d(end[0], end[1], 0);
+                        DrawPolyLineBetweenPoints(p1, p2, wiringLayer);
+                    }
+                }
+            }
+            // 绘制引出线
+            foreach (var line in obj.lighting_design.power_outlet_connection_line_mm)
+            {
+                if (line.Count >= 2)
+                {
+                    var start = line[0];
+                    var end = line[1];
+                    if (start.Count >= 2 && end.Count >= 2)
+                    {
+                        Point3d p1 = new Point3d(start[0], start[1], 0);
+                        Point3d p2 = new Point3d(end[0], end[1], 0);
+                        DrawPolyLineBetweenPoints(p1, p2, wiringLayer);
+                    }
                 }
             }
             // 插入插座
+            int switch_count = obj.switch_position.fixture_count;
             if (obj.socket_positions != null)
             {
                 string socketLayer = "插座"; // 替换为你项目中的图层名
@@ -627,7 +684,7 @@ namespace CoDesignStudy.Cad.PlugIn
                     }
                 }
             }
-
+            AddOrUpdateComponent("三相五孔插座", switch_count, "220V 10A");
             // 插入开关
             if (obj.switch_position?.position_mm != null && obj.switch_position.position_mm.Count >= 2)
             {
@@ -637,16 +694,12 @@ namespace CoDesignStudy.Cad.PlugIn
                 double z = 0;
                 InsertBlockFromDwg(new Point3d(x, y, z), switchLayer, "开关");
             }
+            AddOrUpdateComponent("开关", 1, "220V 10A");
             // 生成线路
-            DrawOpenPolyline(insertPoints, "照明-WIRE");
+            //DrawOpenPolyline(insertPoints, "照明-WIRE");
 
             // 输出结构化JSON
             string json = Newtonsoft.Json.JsonConvert.SerializeObject(result, Newtonsoft.Json.Formatting.Indented);
-            ed.WriteMessage($"\n{json}");
-            ed.WriteMessage($"\n灯具类型：{obj.lighting_design.fixture_type}");
-            ed.WriteMessage($"\n灯具数量：{obj.lighting_design.fixture_count}");
-            ed.WriteMessage($"\n灯具坐标：{obj.lighting_design.fixture_positions_mm}");
-            ed.WriteMessage($"\n推理过程：{Thinking_content}");
 
             // 导出到文件
             try
@@ -659,7 +712,54 @@ namespace CoDesignStudy.Cad.PlugIn
             {
                 ed.WriteMessage($"\n导出JSON文件失败: {ex.Message}");
             }
+
+            // 记录
+
         }
+        private void AddOrUpdateComponent(string type, int count, string info)
+        {
+            if (componentStats.ContainsKey(type))
+            {
+                var old = componentStats[type];
+                componentStats[type] = (old.Count + count, old.Info); // 保持原 info
+            }
+            else
+            {
+                componentStats[type] = (count, info);
+            }
+        }
+
+        public string ShowInputBoxAt(System.Drawing.Point location, string title)
+        {
+            Form inputForm = new Form();
+            inputForm.StartPosition = FormStartPosition.Manual;
+            inputForm.Location = location;
+            inputForm.Width = 400;
+            inputForm.Height = 150;
+            inputForm.Text = title;
+
+            TextBox textBox = new TextBox { Dock = DockStyle.Fill, Multiline = true };
+            Button okButton = new Button { Text = "确定", Dock = DockStyle.Bottom };
+            okButton.Click += (s, e) => inputForm.DialogResult = DialogResult.OK;
+
+            // 支持回车直接提交
+            textBox.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Enter && !e.Shift)
+                {
+                    e.SuppressKeyPress = true;
+                    inputForm.DialogResult = DialogResult.OK;
+                }
+            };
+
+            inputForm.Controls.Add(textBox);
+            inputForm.Controls.Add(okButton);
+
+            if (inputForm.ShowDialog() == DialogResult.OK)
+                return textBox.Text.Trim();
+            return "";
+        }
+
         public void InsertBlockFromDwg(Point3d insertPoint, string targetLayer, string blockName, double rotationDegrees = 0)
         {
             Document doc = CADApplication.DocumentManager.MdiActiveDocument;
@@ -969,33 +1069,105 @@ namespace CoDesignStudy.Cad.PlugIn
                 tr.Commit();
             }
         }
-        public string SendPromptAndWaitReply(PaletteSetDlg dlg, string prompt)
+        public void ExportStatisticsToExcel(List<(string Type, int Count, string Info)> stats, string filePath)
         {
-            var tcs = new TaskCompletionSource<string>();
 
-            dlg.BeginInvoke((MethodInvoker)(async () =>
+            using (var package = new ExcelPackage())
             {
-                try
-                {
-                    string reply = await dlg.SendAsync(prompt);
-                    tcs.TrySetResult(reply);
-                }
-                catch (System.Exception ex)
-                {
-                    tcs.TrySetException(ex);
-                }
-            }));
+                var worksheet = package.Workbook.Worksheets.Add("元件统计");
 
-            // 同步等待最终返回结果（不要在 UI 线程中调用这句！）
-            return tcs.Task.GetAwaiter().GetResult();
+                // 表头
+                worksheet.Cells[1, 1].Value = "元件类型";
+                worksheet.Cells[1, 2].Value = "个数";
+                worksheet.Cells[1, 3].Value = "元件信息";
+
+                int row = 2;
+                foreach (var item in stats)
+                {
+                    worksheet.Cells[row, 1].Value = item.Type;
+                    worksheet.Cells[row, 2].Value = item.Count;
+                    worksheet.Cells[row, 3].Value = item.Info;
+                    row++;
+                }
+
+                // 自动调整列宽
+                worksheet.Cells[worksheet.Dimension.Address].AutoFitColumns();
+
+                // 保存到文件
+                FileInfo file = new FileInfo(filePath);
+                package.SaveAs(file);
+            }
         }
 
-        private async Task SelectEntitiesByRectangleAndPrintInfoAsync(string prompt, PaletteSetDlg dlg)
+        public void DrawLineBetweenPoints(Point3d pt1, Point3d pt2, string layerName)
         {
-            Action<string> updateFunc = null;
-            // 等待 AI 控件初始化并获得更新函数
-            var aiContentControl = await dlg.AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
-            await dlg.GetAIResponse(prompt, updateFunc);
+            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+
+            using (DocumentLock docLock = doc.LockDocument())
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                // 确保图层存在
+                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                if (!lt.Has(layerName))
+                {
+                    lt.UpgradeOpen();
+                    LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
+                    lt.Add(newLayer);
+                    tr.AddNewlyCreatedDBObject(newLayer, true);
+                }
+
+                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+                // 创建直线
+                Line line = new Line(pt1, pt2)
+                {
+                    Layer = layerName,
+                    Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 204), // 粉红色
+                    LineWeight = LineWeight.LineWeight211 // 0.50mm线宽
+                };
+
+                modelSpace.AppendEntity(line);
+                tr.AddNewlyCreatedDBObject(line, true);
+
+                tr.Commit();
+            }
+        }
+        public void DrawPolyLineBetweenPoints(Point3d pt1, Point3d pt2, string layerName)
+        {
+            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+
+            using (DocumentLock docLock = doc.LockDocument())
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                // 确保图层存在
+                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                if (!lt.Has(layerName))
+                {
+                    lt.UpgradeOpen();
+                    LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
+                    lt.Add(newLayer);
+                    tr.AddNewlyCreatedDBObject(newLayer, true);
+                }
+
+                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+                // 创建多段线
+                Polyline poly = new Polyline();
+                poly.AddVertexAt(0, new Point2d(pt1.X, pt1.Y), 0, 30f, 30f); // 线宽30f
+                poly.AddVertexAt(1, new Point2d(pt2.X, pt2.Y), 0, 30f, 30f); // 线宽30f
+                poly.Layer = layerName;
+                poly.Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 204); // 粉红色
+                poly.ConstantWidth = 30f;
+
+                modelSpace.AppendEntity(poly);
+                tr.AddNewlyCreatedDBObject(poly, true);
+
+                tr.Commit();
+            }
         }
         [CommandMethod("MM", CommandFlags.Session)]
         public void TestMarkdig()

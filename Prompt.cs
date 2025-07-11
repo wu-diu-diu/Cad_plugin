@@ -239,13 +239,17 @@ namespace CoDesignStudy.Cad.PlugIn
 }}
 ```
 ";
-        public static string GetLightingPrompt(string roomType, string coordinatesStr, string doorPositionStr)
+        public static string GetLightingPrompt(string roomType, string coordinatesStr, string doorPositionStr, string instruction)
         {
             return $@"你是一名专业的电气设计助手，任务是根据房间名称、房间的四个坐标点，以及门的位置，进行如下电气设计：
 
 - 房间照明布置（含照度分析、灯具选择与布局）；
 - 插座的合理布置（贴墙，符合施工要求）；
 - 开关的合理放置（靠近门）；
+
+用户还提供了额外的自定义指令,请优先参考指令进行设计,尤其是灯具类型和排布方式的选择:
+### 自定义指令:
+{instruction}
 
 请你遵循以下步骤：
 
@@ -254,12 +258,16 @@ namespace CoDesignStudy.Cad.PlugIn
 3. 根据照度需求和面积，结合维护系数(默认 0.8)，计算所需总光通量（单位 lm）；
 4. 选择合适的灯具型号（如：LED面板灯、防爆灯等），并说明选择理由；
 5. 根据每盏灯的光通量，估算所需灯具数量；
-6. 设计灯具的布置方式（如：按行列均匀排列），并输出每盏灯的中心坐标和安装高度（单位：mm）；
-7. 设计插座布置：插座应靠墙放置，通常布置在左右墙上（即坐标最小/最大 x 所在的墙）。左墙插入角度为 -90°，右墙插入角度为 90°，每面墙建议至少布置 1 个插座；
-8. 设计开关位置：应靠近门的位置布置开关，尽量选择离门最近的墙体边界点，有几个门就有几个开关；
-9. 最后以 JSON 格式输出灯具、插座、开关的布置信息，供程序解析使用：
+6. 设计灯具的布置方式（如：按行列均匀排列），必须是**矩形均匀排布**，不可以排布为三角形，多边形等，并输出每盏灯的中心坐标和安装高度（单位：mm）；
+7. 设计灯具之间的连线方式:**优先按照行优先或列优先的方式，不可使用S型布线**，使连线整齐有序、便于施工。输出灯具连线的方式，格式为每段连接的起点和终点坐标对。
+8. 除了灯具之间的连线，**还需要从最靠近门的灯具引出一根导线连接至开关位置**（取最近的一个开关点），请你一并输出此段额外引出线的坐标对；
+9. 设计插座布置：插座应靠墙放置，通常布置在左右墙上（即坐标最小/最大 x 所在的墙）。左墙插入角度为 -90°，右墙插入角度为 90°，每面墙建议至少布置 1 个插座；
+10. 设计开关位置：应靠近门的位置布置开关同时要和最近的灯具的位置**对齐**，有几个门就有几个开关；
+11. 最后以 JSON 格式输出灯具、插座、开关的布置信息，供程序解析使用：
 
 **注意**：灯的位置坐标必须在矩形内部，不可放在矩形边界；
+- 连线必须整齐、有序、可施工，避免穿越灯具之间的对角线；
+- 引出线必须从**最靠近门的灯具**连接到**最近的插座**；
 
 ```json
 {{
@@ -272,17 +280,25 @@ namespace CoDesignStudy.Cad.PlugIn
       [x1, y1],
       [x2, y2],
       ...
-    ]
+    ],
+  ""fixture_wiring_lines_mm"": [
+      [[x1, y1], [x2, y2]],
+      [[x2, y2], [x3, y3]],
+      ...
+    ],
+  ""power_outlet_connection_line_mm"": [[[x_near_door, y_near_door], [x_socket, y_socket]]]
   }},
   ""socket_positions"": [
     {{
-      ""position_mm"": [x, y],
-      ""rotation_degrees"": 插入角度
+      ""position_mm"": [x_socket, y_socket],
+      ""rotation_degrees"": 插入角度,
+      ""fixture_count"": 插座数量（整数）,
     }}
     ...
   ],
   ""switch_position"": {{
-    ""position_mm"": [x, y]
+    ""position_mm"": [x, y],
+    ""fixture_count"": 开关数量（整数）,
   }}
 }}
 ### 输入：

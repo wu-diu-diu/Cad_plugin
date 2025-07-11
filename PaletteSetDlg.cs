@@ -191,11 +191,11 @@ namespace CoDesignStudy.Cad.PlugIn
         #endregion
 
         #region 消息处理
-        public async Task<string> SendAsync(string message)
+        public async Task<string> SendAsync(string message, string instruction)
         {
             if (string.IsNullOrWhiteSpace(message)) return null;
 
-            //await AppendMessageAsync("用户", message);
+            await AppendMessageAsync("用户", instruction);
 
 
             string fullAIResponse = "";
@@ -204,7 +204,7 @@ namespace CoDesignStudy.Cad.PlugIn
             {
                 Action<string> updateFunc = null;
                 var aiContentControl = await AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
-                fullAIResponse = await GetAIResponse(message, updateFunc);
+                fullAIResponse = await GetAIResponse(message + instruction, updateFunc);
             }
             catch (Exception ex)
             {
