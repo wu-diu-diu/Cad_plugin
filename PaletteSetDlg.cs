@@ -204,7 +204,7 @@ namespace CoDesignStudy.Cad.PlugIn
             {
                 Action<string> updateFunc = null;
                 var aiContentControl = await AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
-                fullAIResponse = await GetAIResponse(message + instruction, updateFunc);
+                fullAIResponse = await GetAIResponse(message, updateFunc);
             }
             catch (Exception ex)
             {
@@ -521,6 +521,7 @@ namespace CoDesignStudy.Cad.PlugIn
     </script>
 </body>
 </html>";
+                    
 
                     webView.CoreWebView2.NavigateToString(doc);
 

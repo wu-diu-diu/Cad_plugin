@@ -349,6 +349,8 @@ namespace CoDesignStudy.Cad.PlugIn
                 public int fixture_count { get; set; }
                 public int power_w { get; set; }
                 public int mounting_height_mm { get; set; }
+                public int fixture_rotations_degrees { get; set; }
+                public List<double> annotation_position_mm { get; set; }
                 public List<List<double>> fixture_positions_mm { get; set; }
                 public List<List<List<double>>> fixture_wiring_lines_mm { get; set; }
                 public List<List<List<double>>> power_outlet_connection_line_mm { get; set; }
@@ -357,14 +359,14 @@ namespace CoDesignStudy.Cad.PlugIn
 
             public class SocketPosition
             {
-                public List<int> position_mm { get; set; }
+                public List<double> position_mm { get; set; }
                 public int rotation_degrees { get; set; }
                 public int fixture_count { get; set; }
             }
 
             public class SwitchPosition
             {
-                public List<int> position_mm { get; set; }
+                public List<double> position_mm { get; set; }
                 public int fixture_count { get; set; }
             }
         }
@@ -533,7 +535,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 result.RectPoints = rectPoints;
             }
 
-
+            // 提取门坐标
             foreach (string doorName in doorNames)
             {
                 if (result.Blocks.ContainsKey(doorName))
@@ -605,7 +607,13 @@ namespace CoDesignStudy.Cad.PlugIn
             Thinking_content = Regex.Replace(reply, @"```json\s*([\s\S]+?)\s*```", "").Trim();
 
             var obj = JsonConvert.DeserializeObject<LightingDesignResponse>(ModelReplyJson);
-
+            // 插入注释信息
+            List<double> annotation_coords = obj.lighting_design.annotation_position_mm;
+            if (annotation_coords != null && annotation_coords.Count == 2)
+            {
+                Point3d annotationPoint = new Point3d(annotation_coords[0], annotation_coords[1], 0);
+                InsertLightingInfo(annotationPoint, obj.lighting_design.fixture_count, obj.lighting_design.power_w, obj.lighting_design.mounting_height_mm / 1000);
+            }
             // 保存灯具坐标点以供线路连接
             List<Point3d> insertPoints = new List<Point3d>();
             string lightType = obj.lighting_design.fixture_type;
@@ -620,6 +628,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 lightName = "gen_light";
             string LightLayer = "照明";
             int lightCount = obj.lighting_design.fixture_count;
+            int lightRotation = obj.lighting_design.fixture_rotations_degrees;
             // 插入灯具
             foreach (var point in obj.lighting_design.fixture_positions_mm)
             {
@@ -630,7 +639,7 @@ namespace CoDesignStudy.Cad.PlugIn
                     double z = 0;
                     insertPoints.Add(new Point3d(x, y, z));
 
-                    InsertBlockFromDwg(new Point3d(x, y, z), LightLayer, lightName);
+                    InsertBlockFromDwg(new Point3d(x, y, z), LightLayer, lightName, lightRotation);
                     // 统计信息
                 }
             }
@@ -695,8 +704,10 @@ namespace CoDesignStudy.Cad.PlugIn
                 InsertBlockFromDwg(new Point3d(x, y, z), switchLayer, "开关");
             }
             AddOrUpdateComponent("开关", 1, "220V 10A");
-            // 生成线路
+            // 最短路径生成线路
             //DrawOpenPolyline(insertPoints, "照明-WIRE");
+            // 插入注释
+            //InsertLightingInfo()
 
             // 输出结构化JSON
             string json = Newtonsoft.Json.JsonConvert.SerializeObject(result, Newtonsoft.Json.Formatting.Indented);
@@ -817,10 +828,10 @@ namespace CoDesignStudy.Cad.PlugIn
         {
             Point3d insertPoint = new Point3d(34640, 55259, 0);
             string targetLayer = "AI";
-            double rotationDegrees = -90;
+            double rotationDegrees = 90;
             Document doc = CADApplication.DocumentManager.MdiActiveDocument;
             Database db = doc.Database;
-            string dwgFilePath = @"C:\Users\武丢丢\Documents\gen_light\插座新.dwg"; // 固定块文件路径
+            string dwgFilePath = @"C:\Users\武丢丢\Documents\gen_light\双管荧光灯.dwg"; // 固定块文件路径
             string blockName = "AI_Gen_Light"; // 块名
 
             using (DocumentLock docLock = doc.LockDocument())
@@ -1178,6 +1189,126 @@ namespace CoDesignStudy.Cad.PlugIn
             var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
             var result = Markdown.ToHtml("| 灯具类型 | 个数 | 瓦数 | \r\n|---------|-----|-----|\r\n | 吸顶灯 | 2 | 20W | | 防爆灯 | 3 | 50W | | 荧光灯 | 5 | 60W |", pipeline);
             ed.WriteMessage($"{result}");   // prints: <p>This is a text with some <em>emphasis</em></p>
+        }
+        /// <summary>
+        /// 在图纸中插入灯具信息文本，格式为：
+        /// 上：功率（如 "100W"）
+        /// 下：安装高度（如 "4.5"）
+        /// 左：灯具数量（如 "4"）
+        /// </summary>
+        /// <param name="basePosition">文本中心点（用于功率位置）</param>
+        /// <param name="fixtureCount">灯具数量</param>
+        /// <param name="powerW">功率（单位 W）</param>
+        /// <param name="mountingHeight">安装高度（单位 m）</param>
+        /// <param name="textHeight">文字高度（默认 300）</param>
+        /// <param name="layerName">图层名称（可选）</param>
+        //[CommandMethod("PP", CommandFlags.Session)]
+        public void InsertLightingInfo(Point3d basePosition, int fixtureCount, int powerW, int mountingHeight, double textHeight = 300, string layerName = "PUB_TEXT")
+        {
+            //Point3d basePosition = new Point3d(34640, 55259, 0);
+            //int fixtureCount = 4;
+            //int powerW = 100;
+            //double mountingHeight = 4.5;
+            //int textHeight = 300;
+            //string layerName = "PUB_TEXT";
+            // 插入中间的功率文本（如 "100W"）
+            InsertTextAt($"{powerW}W", basePosition, layerName, textHeight);
+
+            // 插入下方的安装高度文本（如 "4.5"）
+            var below = new Point3d(basePosition.X, basePosition.Y - textHeight * 1.4, basePosition.Z);
+            InsertTextAt($"{mountingHeight:0.##}", below, layerName, textHeight);
+
+            // 插入左侧的灯具数量文本（如 "4"）
+            var left = new Point3d(basePosition.X - textHeight * 1.4, basePosition.Y - textHeight * 0.8, basePosition.Z);
+            InsertTextAt($"{fixtureCount}", left, layerName, textHeight);
+
+            // 计算直线起止点（在瓦数和高度之间，略微留白）
+            double halfLineLength = textHeight * 2.0;
+            var lineY = basePosition.Y - 85; // 在两者中间
+            Point3d lineStart = new Point3d(basePosition.X - halfLineLength + 500, lineY, basePosition.Z);
+            Point3d lineEnd = new Point3d(basePosition.X + halfLineLength +500, lineY, basePosition.Z);
+
+            // 绘制黄色横线
+            DrawYellowLine(lineStart, lineEnd, layerName);
+        }
+        /// <summary>
+        /// 在指定坐标插入单行文本（DBText）
+        /// </summary>
+        /// <param name="text">要插入的文本内容</param>
+        /// <param name="position">插入点坐标</param>
+        /// <param name="layerName">可选，插入到的图层，默认为当前图层</param>
+        public void InsertTextAt(string text, Point3d position, string layerName = null, double textHeight = 300)
+        {
+            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+
+            using (DocumentLock docLock = doc.LockDocument())
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+                DBText dbText = new DBText
+                {
+                    TextString = text,
+                    Position = position,
+                    Height = textHeight,
+                    Layer = layerName, // Explicitly convert ObjectId to string
+                    Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 2)
+                };
+
+                //// 创建图层（如果不存在）
+                //if (!string.IsNullOrEmpty(layerName))
+                //{
+                //    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                //    if (!lt.Has(layerName))
+                //    {
+                //        lt.UpgradeOpen();
+                //        LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
+                //        lt.Add(newLayer);
+                //        tr.AddNewlyCreatedDBObject(newLayer, true);
+                //    }
+                //    dbText.Layer = layerName;
+                //}
+
+                modelSpace.AppendEntity(dbText);
+                tr.AddNewlyCreatedDBObject(dbText, true);
+
+                tr.Commit();
+            }
+        }
+        public void DrawYellowLine(Point3d start, Point3d end, string layerName)
+        {
+            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+
+            using (DocumentLock docLock = doc.LockDocument())
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                // 确保图层存在
+                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                if (!lt.Has(layerName))
+                {
+                    lt.UpgradeOpen();
+                    LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
+                    lt.Add(newLayer);
+                    tr.AddNewlyCreatedDBObject(newLayer, true);
+                }
+
+                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+                Line line = new Line(start, end)
+                {
+                    Layer = layerName,
+                    Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 2) // 2 = 黄色
+                };
+
+                modelSpace.AppendEntity(line);
+                tr.AddNewlyCreatedDBObject(line, true);
+
+                tr.Commit();
+            }
         }
         #endregion
     }
