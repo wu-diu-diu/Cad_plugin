@@ -1,4 +1,5 @@
 ﻿using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
@@ -8,6 +9,10 @@ using Autodesk.Windows;
 using BoundingRectangle;
 using Markdig;
 using Newtonsoft.Json;
+using NPOI.SS.UserModel;
+using NPOI.XSSF.UserModel;
+using OfficeOpenXml;
+using OfficeOpenXml.Style;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -19,8 +24,6 @@ using System.Windows.Forms;
 using System.Xml.Linq;
 using System.Xml.Schema;
 using static System.Net.Mime.MediaTypeNames;
-using OfficeOpenXml;
-using OfficeOpenXml.Style;
 using CADApplication = Autodesk.AutoCAD.ApplicationServices.Application;
 
 [assembly: ExtensionApplication(typeof(CoDesignStudy.Cad.PlugIn.Command))]
@@ -37,7 +40,7 @@ namespace CoDesignStudy.Cad.PlugIn
         public string FinalPrompt;
         public string FinalReply;
         public static PaletteSetDlg DlgInstance;
-        Dictionary<string, (int Count, string Info)> componentStats = new Dictionary<string, (int, string)>();
+        Dictionary<string, (double Count, string Info)> componentStats = new Dictionary<string, (double, string)>();
 
         #endregion
 
@@ -223,7 +226,10 @@ namespace CoDesignStudy.Cad.PlugIn
                         .Select(kv => (Type: kv.Key, Count: kv.Value.Count, Info: kv.Value.Info))
                         .ToList();
 
-            ExportStatisticsToExcel(statsList, @"D:\最终统计.xlsx");
+            //ExportStatisticsToExcel(statsList, @"D:\最终统计.xlsx");
+            Point3d insertPoint = new Point3d(34640, 55259, 0);
+
+            DrawComponentTable6ColsWithBlocks(statsList);
         }
 
         [CommandMethod("PRINT_ALL_BLOCK_NAMES", CommandFlags.Session)]
@@ -643,9 +649,10 @@ namespace CoDesignStudy.Cad.PlugIn
                     // 统计信息
                 }
             }
-            AddOrUpdateComponent(lightName, lightCount, obj.lighting_design.power_w.ToString());
+            AddOrUpdateComponent(lightName, lightCount, obj.lighting_design.power_w.ToString()+"W");
             // 绘制灯具之间的连线
             string wiringLayer = "照明连线";
+            double lightLength = 0;
             foreach (var line in obj.lighting_design.fixture_wiring_lines_mm)
             {
                 if (line.Count >= 2)
@@ -656,7 +663,7 @@ namespace CoDesignStudy.Cad.PlugIn
                     {
                         Point3d p1 = new Point3d(start[0], start[1], 0);
                         Point3d p2 = new Point3d(end[0], end[1], 0);
-                        DrawPolyLineBetweenPoints(p1, p2, wiringLayer);
+                        lightLength += DrawPolyLineBetweenPoints(p1, p2, wiringLayer);
                     }
                 }
             }
@@ -671,10 +678,12 @@ namespace CoDesignStudy.Cad.PlugIn
                     {
                         Point3d p1 = new Point3d(start[0], start[1], 0);
                         Point3d p2 = new Point3d(end[0], end[1], 0);
-                        DrawPolyLineBetweenPoints(p1, p2, wiringLayer);
+                        lightLength += DrawPolyLineBetweenPoints(p1, p2, wiringLayer);
                     }
                 }
             }
+            lightLength = Math.Round(lightLength / 1000.0, 1);
+            AddOrUpdateComponent("照明线路", lightLength, "BV-500 4mm²");
             // 插入插座
             int switch_count = obj.switch_position.fixture_count;
             if (obj.socket_positions != null)
@@ -689,7 +698,7 @@ namespace CoDesignStudy.Cad.PlugIn
                         double z = 0;
                         double rotationDeg = socket.rotation_degrees;
 
-                        InsertBlockFromDwg(new Point3d(x, y, z), socketLayer, "插座新", rotationDeg);
+                        InsertBlockFromDwg(new Point3d(x, y, z), socketLayer, "三相五孔插座", rotationDeg);
                     }
                 }
             }
@@ -727,7 +736,7 @@ namespace CoDesignStudy.Cad.PlugIn
             // 记录
 
         }
-        private void AddOrUpdateComponent(string type, int count, string info)
+        private void AddOrUpdateComponent(string type, double count, string info)
         {
             if (componentStats.ContainsKey(type))
             {
@@ -872,6 +881,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 }
             }
         }
+
 
         public static List<Point3d> SortPointsToClosedLoop(List<Point3d> inputPoints)
         {
@@ -1082,31 +1092,36 @@ namespace CoDesignStudy.Cad.PlugIn
         }
         public void ExportStatisticsToExcel(List<(string Type, int Count, string Info)> stats, string filePath)
         {
+            // 创建工作簿
+            IWorkbook workbook = new XSSFWorkbook(); // .xlsx 格式
+            ISheet sheet = workbook.CreateSheet("元件统计");
 
-            using (var package = new ExcelPackage())
+            // 创建表头
+            IRow headerRow = sheet.CreateRow(0);
+            headerRow.CreateCell(0).SetCellValue("元件类型");
+            headerRow.CreateCell(1).SetCellValue("个数");
+            headerRow.CreateCell(2).SetCellValue("元件信息");
+
+            // 填充数据
+            for (int i = 0; i < stats.Count; i++)
             {
-                var worksheet = package.Workbook.Worksheets.Add("元件统计");
+                var item = stats[i];
+                IRow row = sheet.CreateRow(i + 1);
+                row.CreateCell(0).SetCellValue(item.Type);
+                row.CreateCell(1).SetCellValue(item.Count);
+                row.CreateCell(2).SetCellValue(item.Info);
+            }
 
-                // 表头
-                worksheet.Cells[1, 1].Value = "元件类型";
-                worksheet.Cells[1, 2].Value = "个数";
-                worksheet.Cells[1, 3].Value = "元件信息";
+            // 自动列宽（可选）
+            for (int i = 0; i < 3; i++)
+            {
+                sheet.AutoSizeColumn(i);
+            }
 
-                int row = 2;
-                foreach (var item in stats)
-                {
-                    worksheet.Cells[row, 1].Value = item.Type;
-                    worksheet.Cells[row, 2].Value = item.Count;
-                    worksheet.Cells[row, 3].Value = item.Info;
-                    row++;
-                }
-
-                // 自动调整列宽
-                worksheet.Cells[worksheet.Dimension.Address].AutoFitColumns();
-
-                // 保存到文件
-                FileInfo file = new FileInfo(filePath);
-                package.SaveAs(file);
+            // 保存到文件
+            using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write))
+            {
+                workbook.Write(fs);
             }
         }
 
@@ -1145,10 +1160,11 @@ namespace CoDesignStudy.Cad.PlugIn
                 tr.Commit();
             }
         }
-        public void DrawPolyLineBetweenPoints(Point3d pt1, Point3d pt2, string layerName)
+        public int DrawPolyLineBetweenPoints(Point3d pt1, Point3d pt2, string layerName)
         {
             Document doc = CADApplication.DocumentManager.MdiActiveDocument;
             Database db = doc.Database;
+            int polylineLength = 0;
 
             using (DocumentLock docLock = doc.LockDocument())
             using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -1168,17 +1184,19 @@ namespace CoDesignStudy.Cad.PlugIn
 
                 // 创建多段线
                 Polyline poly = new Polyline();
-                poly.AddVertexAt(0, new Point2d(pt1.X, pt1.Y), 0, 30f, 30f); // 线宽30f
-                poly.AddVertexAt(1, new Point2d(pt2.X, pt2.Y), 0, 30f, 30f); // 线宽30f
+                poly.AddVertexAt(0, new Point2d(pt1.X, pt1.Y), 0, 35f, 35f); // 线宽35f
+                poly.AddVertexAt(1, new Point2d(pt2.X, pt2.Y), 0, 35f, 35f); // 线宽35f
                 poly.Layer = layerName;
-                poly.Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 204); // 粉红色
-                poly.ConstantWidth = 30f;
+                poly.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 2); // 黄色
+                poly.ConstantWidth = 35f;
 
                 modelSpace.AppendEntity(poly);
                 tr.AddNewlyCreatedDBObject(poly, true);
-
+                // 获取多段线长度
+                polylineLength = (int)poly.Length;
                 tr.Commit();
             }
+            return polylineLength;
         }
         [CommandMethod("MM", CommandFlags.Session)]
         public void TestMarkdig()
@@ -1248,12 +1266,14 @@ namespace CoDesignStudy.Cad.PlugIn
                 BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
                 BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
 
-                DBText dbText = new DBText
+                MText mtext = new MText
                 {
-                    TextString = text,
-                    Position = position,
-                    Height = textHeight,
-                    Layer = layerName, // Explicitly convert ObjectId to string
+                    Contents = text,
+                    Location = position,
+                    TextHeight = textHeight,
+                    Width = 0, // 0 表示不自动换行，可设置为具体值以控制列宽
+                    Attachment = AttachmentPoint.BottomLeft, // 左下角对齐
+                    Layer = layerName,
                     Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 2)
                 };
 
@@ -1271,8 +1291,8 @@ namespace CoDesignStudy.Cad.PlugIn
                 //    dbText.Layer = layerName;
                 //}
 
-                modelSpace.AppendEntity(dbText);
-                tr.AddNewlyCreatedDBObject(dbText, true);
+                modelSpace.AppendEntity(mtext);
+                tr.AddNewlyCreatedDBObject(mtext, true);
 
                 tr.Commit();
             }
@@ -1306,6 +1326,154 @@ namespace CoDesignStudy.Cad.PlugIn
 
                 modelSpace.AppendEntity(line);
                 tr.AddNewlyCreatedDBObject(line, true);
+
+                tr.Commit();
+            }
+        }
+        public void DrawComponentTable6ColsWithBlocks(List<(string Type, double Count, string Info)> statsList)
+        {
+            double rowHeight = 800;
+            short colorIndex = 7;
+            LineWeight lineWeight = LineWeight.LineWeight200;
+            Point3d insertPoint = new Point3d(3599, 17119, 0);
+            var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            var db = doc.Database;
+
+            using (DocumentLock docLock = doc.LockDocument())
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var btr = (BlockTableRecord)tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite);
+
+                int rowCount = statsList.Count;
+                int totalRowCount = rowCount + 2;
+                int colCount = 6;
+
+                // 指定列宽
+                double[] colWidths = { 900, 4000, 4000, 900, 900, 1500 };
+                string[] headerTitles = { "编号", "名称", "规范", "单位", "数量", "图例" };
+
+                // 计算每列起始X坐标
+                double[] colX = new double[colCount + 1];
+                colX[0] = insertPoint.X;
+                for (int i = 1; i <= colCount; i++)
+                {
+                    colX[i] = colX[i - 1] + colWidths[i - 1];
+                }
+
+                double tableHeight = totalRowCount * rowHeight;
+
+                // 画水平线
+                for (int i = 0; i <= totalRowCount; i++)
+                {
+                    double y = insertPoint.Y - i * rowHeight;
+                    var start = new Point3d(colX[0], y, 0);
+                    var end = new Point3d(colX[colCount], y, 0);
+                    var line = new Line(start, end)
+                    {
+                        Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(ColorMethod.ByAci, colorIndex),
+                        LineWeight = lineWeight
+                    };
+                    btr.AppendEntity(line);
+                    tr.AddNewlyCreatedDBObject(line, true);
+                }
+
+                // 画垂直线
+                for (int j = 0; j <= colCount; j++)
+                {
+                    Point3d start;
+                    if (j == 0 || j == colCount)
+                    {
+                        start = new Point3d(colX[j], insertPoint.Y, 0);
+                    }
+                    else
+                    {
+                        start = new Point3d(colX[j], insertPoint.Y - rowHeight, 0);
+                    }
+                    var end = new Point3d(colX[j], insertPoint.Y - tableHeight, 0);
+                    var line = new Line(start, end)
+                    {
+                        Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(ColorMethod.ByAci, colorIndex),
+                        LineWeight = lineWeight
+                    };
+                    btr.AppendEntity(line);
+                    tr.AddNewlyCreatedDBObject(line, true);
+                }
+                // 插入标题：第 0 行，居中插入
+                {
+                    double titleCenterX = (colX[colCount] + colX[0]) / 2;
+                    double titleY = insertPoint.Y - rowHeight * 0.6;
+
+                    var mtext = new MText
+                    {
+                        Contents = "设备材料清单",
+                        TextHeight = rowHeight * 0.5,
+                        Location = new Point3d(titleCenterX, titleY, 0),
+                        Attachment = AttachmentPoint.MiddleCenter,
+                        Width = colX[colCount] - colX[0]
+                    };
+
+                    btr.AppendEntity(mtext);
+                    tr.AddNewlyCreatedDBObject(mtext, true);
+                }
+                // 插入表头行（第1行）
+                for (int j = 0; j < colCount; j++)
+                {
+                    double x = colX[j] + 100;
+                    double y = insertPoint.Y - rowHeight * 1.6;
+
+                    var text = new DBText
+                    {
+                        TextString = headerTitles[j],
+                        Position = new Point3d(x, y, 0),
+                        Height = rowHeight * 0.35,
+                        Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(ColorMethod.ByAci, 7)
+                    };
+
+                    btr.AppendEntity(text);
+                    tr.AddNewlyCreatedDBObject(text, true);
+                }
+
+                // 插入文本：列顺序 = 行号, type, info, "只", count, 空
+                for (int i = 0; i < rowCount; i++)
+                {
+                    var (type, count, info) = statsList[i];
+                    string unit = type.EndsWith("线路") ? "米" : "只";
+                    string[] values = {
+                                        (i+1).ToString(),    // 第1列：行号
+                                        type,            // 第2列：元件类型
+                                        info,            // 第3列：元件信息
+                                        unit,            // 第4列：单位
+                                        count.ToString(),// 第5列：数量
+                                        ""               // 图例（插入块）
+                                    };
+
+                    for (int j = 0; j < colCount; j++)
+                    {
+                        // 块插入逻辑（第六列）
+                        if (j == 5)
+                        {
+                            double blockX = colX[j] + colWidths[j] / 2;
+                            double blockY = insertPoint.Y - (i+2) * rowHeight - rowHeight / 2;
+                            var blockPoint = new Point3d(blockX, blockY, 0);
+                            InsertBlockFromDwg(blockPoint, "PUB_TEXT", type, 0);
+                            continue;
+                        }
+                        double x = colX[j] + 100; // 边距内缩
+                        double y = insertPoint.Y - (i+2) * rowHeight - rowHeight * 0.6;
+
+                        var mtext = new MText
+                        {
+                            Contents = values[j],
+                            Location = new Point3d(x, y, 0),
+                            TextHeight = rowHeight * 0.35,
+                            Width = colWidths[j] - 200, // 控制列内宽度，避免溢出
+                            Attachment = AttachmentPoint.MiddleLeft, // 文字对齐方式
+                            Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(ColorMethod.ByAci, 7)
+                        };
+                        btr.AppendEntity(mtext);
+                        tr.AddNewlyCreatedDBObject(mtext, true);
+                    }
+                }
 
                 tr.Commit();
             }

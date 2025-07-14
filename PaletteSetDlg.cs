@@ -8,6 +8,7 @@ using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms; 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
 using System.Text;
@@ -246,6 +247,11 @@ namespace CoDesignStudy.Cad.PlugIn
             }
         }
         // 流式输出
+        /// <param name="sender">消息发送者</param>
+        /// <param name="message">消息内容</param>
+        /// <param name="isStreaming">是否流式输出（单位 W）</param>
+        /// <param name="setUpdateContent">回调函数，用于将AI内容逐步更新到控件中（单位 m）</param>
+        /// <return return="Task<>是net中表示异步操作的类型，control是system.windows.forms.control类型的对象"> </return>
         public async Task<Control> AppendMessageAsync(string sender, string message, bool isStreaming = false, Action<Action<string>> setUpdateContent = null)
         {
             if (string.IsNullOrWhiteSpace(message) && !isStreaming) return null;
@@ -253,6 +259,8 @@ namespace CoDesignStudy.Cad.PlugIn
 
             if (sender == "AI")
             {
+                // 初始化一个新的webview2，设置基本属性
+                // webview2是一个浏览器控件，用于在winform中渲染html，js，markdown等内容
                 var webView = new WebView2
                 {
                     Width = conversationPanel.Width - 150,
@@ -260,22 +268,29 @@ namespace CoDesignStudy.Cad.PlugIn
                     Height = 50,
                     DefaultBackgroundColor = Color.White
                 };
-
+                // 异步初始化浏览器内核
                 await webView.EnsureCoreWebView2Async();
                 if (webView.CoreWebView2 != null)
                 {
                     // 添加节流变量
                     DateTime lastScrollTime = DateTime.MinValue;
                     int lastHeight = 0;
-
+                    // (s, a) => {}是一个lambda表达式，其中(s, a)是参数
+                    // s是触发事件的对象，a是事件参数
+                    // webmessagereceived是一个监听器，监听js向c#发送消息的回调
+                    // +=表示触发webmessagereceived之后，这个匿名函数就会执行
+                    // js发送消息的逻辑写在了下面的doc中
                     webView.CoreWebView2.WebMessageReceived += (s, a) =>
                     {
+                        // int.tryparse()将js向c#发送的内容解析为一个整数，如果成功就传给height并返回true
                         if (int.TryParse(a.WebMessageAsJson, out int height))
                         {
                             // 只有高度变化显著时才更新
                             if (Math.Abs(height - lastHeight) > 10)
                             {
                                 lastHeight = height;
+                                // 定义一个叫update的匿名函数，类型是action，表示没有参数也没有返回值的一个函数
+                                // 之后运行update()即可执行这个函数
                                 Action update = () =>
                                 {
                                     webView.Height = Math.Max(height, 50);
@@ -289,16 +304,26 @@ namespace CoDesignStudy.Cad.PlugIn
                                         // 延迟滚动，让界面有时间更新
                                         Task.Delay(30).ContinueWith(_ =>
                                         {
-                                            if (webView.IsHandleCreated && !webView.IsDisposed)
+                                            try
                                             {
-                                                webView.Invoke(new Action(() =>
+                                                if (webView.IsHandleCreated && !webView.IsDisposed)
                                                 {
-                                                    // 只有当前WebView是正在更新的AI控件时才滚动
-                                                    if (currentAIControl == webView)
+                                                    webView.Invoke(new Action(() =>
                                                     {
-                                                        SmartAutoScroll(webView);
-                                                    }
-                                                }));
+                                                        try
+                                                        {
+                                                            SmartAutoScroll(webView);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            Debug.WriteLine("SmartAutoScroll failed: " + ex.Message);
+                                                        }
+                                                    }));
+                                                }
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                Debug.WriteLine("Async scroll error: " + ex.Message);
                                             }
                                         });
                                     }
@@ -338,7 +363,7 @@ namespace CoDesignStudy.Cad.PlugIn
             margin: 0;
             padding: 0;
             font-family: 微软雅黑;
-            font-size: 14px;
+            font-size: {htmlsize};
             background-color: #FFFFFF;
             line-height: 1.6;
             word-wrap: break-word;
