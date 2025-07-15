@@ -229,6 +229,16 @@ namespace CoDesignStudy.Cad.PlugIn
             await AppendMessageAsync("用户", userMessage);
             ScrollToBottom();
 
+            if (userMessage.EndsWith("材料清单"))
+            {
+
+                // 调用导出方法（注意：如果该方法不是线程安全的，可以考虑封装到 Task.Run）
+                Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.SendStringToExecute("EE ", true, false, false);
+                await Task.Delay(2000);
+                await AppendMessageAsync("AI", "已为您生成材料清单");
+                return;
+            }
+
             sendButton.Enabled = false;
 
             try

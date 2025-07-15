@@ -332,6 +332,7 @@ namespace CoDesignStudy.Cad.PlugIn
             public RoomInfo room_info { get; set; }
             public LightingDesign lighting_design { get; set; }
             public List<SocketPosition> socket_positions { get; set; }
+            public List<List<List<double>>> socket_wiring_lines_mm { get; set; }
             public SwitchPosition switch_position { get; set; }
 
             public class RoomInfo
@@ -563,10 +564,12 @@ namespace CoDesignStudy.Cad.PlugIn
             var intRectPoints = result.RectPoints
                 .Select(pt => pt.Select(x => (int)x).ToArray())
                 .ToList();
+            // 给矩形加一个偏差，缩小因为识别柱子坐标带来的内轮廓误差
+            var shrunkPoints = ShrinkRectangle(intRectPoints, 125, 125);
             // 绘制一个矩形方便查看算法识别的最小外接矩形范围
-            DrawRectanglePolyline(intRectPoints);
+            DrawRectanglePolyline(shrunkPoints);
             // 外接矩形的坐标转为字符串（如 [[32267, 52942], [41142, 52942], ...]）
-            string coordinatesStr = "[" + string.Join(", ", intRectPoints.Select(
+            string coordinatesStr = "[" + string.Join(", ", shrunkPoints.Select(
                                         pt => $"[{string.Join(", ", pt)}]"
                                     )) + "]";
             // 门的坐标转为字符串
@@ -653,6 +656,7 @@ namespace CoDesignStudy.Cad.PlugIn
             // 绘制灯具之间的连线
             string wiringLayer = "照明连线";
             double lightLength = 0;
+            var lightcolor = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 2);
             foreach (var line in obj.lighting_design.fixture_wiring_lines_mm)
             {
                 if (line.Count >= 2)
@@ -663,7 +667,7 @@ namespace CoDesignStudy.Cad.PlugIn
                     {
                         Point3d p1 = new Point3d(start[0], start[1], 0);
                         Point3d p2 = new Point3d(end[0], end[1], 0);
-                        lightLength += DrawPolyLineBetweenPoints(p1, p2, wiringLayer);
+                        lightLength += DrawPolyLineBetweenPoints(p1, p2, wiringLayer, 35f, lightcolor);
                     }
                 }
             }
@@ -678,7 +682,7 @@ namespace CoDesignStudy.Cad.PlugIn
                     {
                         Point3d p1 = new Point3d(start[0], start[1], 0);
                         Point3d p2 = new Point3d(end[0], end[1], 0);
-                        lightLength += DrawPolyLineBetweenPoints(p1, p2, wiringLayer);
+                        lightLength += DrawPolyLineBetweenPoints(p1, p2, wiringLayer, 35f, lightcolor);
                     }
                 }
             }
@@ -703,6 +707,26 @@ namespace CoDesignStudy.Cad.PlugIn
                 }
             }
             AddOrUpdateComponent("三相五孔插座", switch_count, "220V 10A");
+            // 绘制插座之间的连线
+            wiringLayer = "插座连线";
+            double socketLength = 0;
+            var socketcolor = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 6);
+            foreach (var line in obj.socket_wiring_lines_mm)
+            {
+                if (line.Count >= 2)
+                {
+                    var start = line[0];
+                    var end = line[1];
+                    if (start.Count >= 2 && end.Count >= 2)
+                    {
+                        Point3d p1 = new Point3d(start[0], start[1], 0);
+                        Point3d p2 = new Point3d(end[0], end[1], 0);
+                        socketLength += DrawPolyLineBetweenPoints(p1, p2, wiringLayer, 20f, socketcolor);
+                    }
+                }
+            }
+            socketLength = Math.Round(socketLength / 1000.0, 1);
+            AddOrUpdateComponent("插座线路", socketLength, "BV-500 2mm²");
             // 插入开关
             if (obj.switch_position?.position_mm != null && obj.switch_position.position_mm.Count >= 2)
             {
@@ -1160,7 +1184,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 tr.Commit();
             }
         }
-        public int DrawPolyLineBetweenPoints(Point3d pt1, Point3d pt2, string layerName)
+        public int DrawPolyLineBetweenPoints(Point3d pt1, Point3d pt2, string layerName, double lineWidth, Autodesk.AutoCAD.Colors.Color color)
         {
             Document doc = CADApplication.DocumentManager.MdiActiveDocument;
             Database db = doc.Database;
@@ -1184,11 +1208,11 @@ namespace CoDesignStudy.Cad.PlugIn
 
                 // 创建多段线
                 Polyline poly = new Polyline();
-                poly.AddVertexAt(0, new Point2d(pt1.X, pt1.Y), 0, 35f, 35f); // 线宽35f
-                poly.AddVertexAt(1, new Point2d(pt2.X, pt2.Y), 0, 35f, 35f); // 线宽35f
+                poly.AddVertexAt(0, new Point2d(pt1.X, pt1.Y), 0, (float)lineWidth, (float)lineWidth); // 线宽35f
+                poly.AddVertexAt(1, new Point2d(pt2.X, pt2.Y), 0, (float)lineWidth, (float)lineWidth); // 线宽35f
                 poly.Layer = layerName;
-                poly.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 2); // 黄色
-                poly.ConstantWidth = 35f;
+                poly.Color = color;
+                poly.ConstantWidth = (float)lineWidth;
 
                 modelSpace.AppendEntity(poly);
                 tr.AddNewlyCreatedDBObject(poly, true);
@@ -1349,7 +1373,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 int colCount = 6;
 
                 // 指定列宽
-                double[] colWidths = { 900, 4000, 4000, 900, 900, 1500 };
+                double[] colWidths = { 900, 4000, 4000, 900, 1200, 1500 };
                 string[] headerTitles = { "编号", "名称", "规范", "单位", "数量", "图例" };
 
                 // 计算每列起始X坐标
@@ -1477,6 +1501,33 @@ namespace CoDesignStudy.Cad.PlugIn
 
                 tr.Commit();
             }
+        }
+        public static List<int[]> ShrinkRectangle(List<int[]> rectPoints, int offsetX, int offsetY)
+        {
+            if (rectPoints == null || rectPoints.Count != 4)
+                throw new ArgumentException("矩形必须有4个点");
+
+            // 将每个点包装成带索引的结构
+            var sorted = rectPoints
+                .Select(pt => new { X = pt[0], Y = pt[1], Point = pt })
+                .ToList();
+
+            // 找出四个角
+            var leftBottom = sorted.OrderBy(p => p.X).ThenBy(p => p.Y).First().Point;
+            var leftTop = sorted.OrderBy(p => p.X).ThenByDescending(p => p.Y).First().Point;
+            var rightTop = sorted.OrderByDescending(p => p.X).ThenByDescending(p => p.Y).First().Point;
+            var rightBottom = sorted.OrderByDescending(p => p.X).ThenBy(p => p.Y).First().Point;
+
+            // 缩小每个角点
+            var newPoints = new List<int[]>
+            {
+                new int[] { leftBottom[0] + offsetX, leftBottom[1] + offsetY },       // 左下
+                new int[] { leftTop[0] + offsetX, leftTop[1] - offsetY * 2 },             // 左上
+                new int[] { rightTop[0] - offsetX * 2, rightTop[1] - offsetY * 2 },           // 右上
+                new int[] { rightBottom[0] - offsetX * 2, rightBottom[1] + offsetY }      // 右下
+            };
+
+            return newPoints;
         }
         #endregion
     }
