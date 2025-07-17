@@ -12,6 +12,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using static LaunchDarkly.Logging.LogCapture;
@@ -196,7 +197,7 @@ namespace CoDesignStudy.Cad.PlugIn
         {
             if (string.IsNullOrWhiteSpace(message)) return null;
 
-            await AppendMessageAsync("用户", instruction);
+            //await AppendMessageAsync("用户", instruction);
 
 
             string fullAIResponse = "";
@@ -236,6 +237,19 @@ namespace CoDesignStudy.Cad.PlugIn
                 Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.SendStringToExecute("EE ", true, false, false);
                 await Task.Delay(2000);
                 await AppendMessageAsync("AI", "已为您生成材料清单");
+                return;
+            }
+            if (userMessage.StartsWith("修改"))
+            {
+                Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.SendStringToExecute("delete_test ", true, false, false);
+                var (roomType, coords, doorCoords) = InsertTracker.GetLastRoomDrawingInputs();
+                userMessage = Prompt.GetLightingPrompt(roomType, coords, doorCoords, userMessage);
+                string reply = await SendAsync(userMessage, "");
+                var match = Regex.Match(reply, @"```json\s*([\s\S]+?)\s*```");
+
+                string ModelReplyJson = match.Groups[1].Value;
+                var commandInstance = new Command();
+                commandInstance.InsertLightingFromModelReply(ModelReplyJson);
                 return;
             }
 

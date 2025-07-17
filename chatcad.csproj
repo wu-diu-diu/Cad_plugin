@@ -228,6 +228,7 @@
       <SubType>UserControl</SubType>
     </Compile>
     <Compile Include="Command.cs" />
+    <Compile Include="InsertTracker.cs" />
     <Compile Include="Result.cs" />
     <Compile Include="Vertex.cs" />
     <Compile Include="Prompt.cs" />

@@ -7,6 +7,7 @@ using Autodesk.AutoCAD.Runtime;
 using Autodesk.AutoCAD.Windows;
 using Autodesk.Windows;
 using BoundingRectangle;
+using DocumentFormat.OpenXml.Office2010.Excel;
 using Markdig;
 using Newtonsoft.Json;
 using NPOI.SS.UserModel;
@@ -40,7 +41,9 @@ namespace CoDesignStudy.Cad.PlugIn
         public string FinalPrompt;
         public string FinalReply;
         public static PaletteSetDlg DlgInstance;
-        Dictionary<string, (double Count, string Info)> componentStats = new Dictionary<string, (double, string)>();
+        public static Dictionary<string, (double Count, string Info)> componentStats = new Dictionary<string, (double, string)>();
+        // 存储上一次插入的图元
+        List<ObjectId> lastInsertedEntities = new List<ObjectId>();
 
         #endregion
 
@@ -311,6 +314,21 @@ namespace CoDesignStudy.Cad.PlugIn
                 tr.Commit();
             }
         }
+        [CommandMethod("delete_test")]
+        public void DeleteTest()
+        {
+            var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            var db = doc.Database;
+            var ed = doc.Editor;
+            if (!InsertTracker.HasLastInsert())
+            {
+                ed.WriteMessage("\n没有可删除的图元。");
+                return;
+            }
+
+            InsertTracker.DeleteLastInserted(db, componentStats);
+            ed.WriteMessage("\n已删除上一次插入的图元及其统计信息。");
+        }
         private static Point3d GetCenterFromExtents(Extents3d ext)
         {
             double centerX = (ext.MinPoint.X + ext.MaxPoint.X) / 2.0;
@@ -382,6 +400,9 @@ namespace CoDesignStudy.Cad.PlugIn
         [CommandMethod("SELECT_RECT_PRINT", CommandFlags.Session)]
         public async void SelectEntitiesByRectangleAndPrintInfo()
         {
+            // 开始记录新一轮插入的图元
+            InsertTracker.BeginNewInsert();
+
             Document doc = CADApplication.DocumentManager.MdiActiveDocument;
             Editor ed = doc.Editor;
             Database db = doc.Database;
@@ -408,11 +429,11 @@ namespace CoDesignStudy.Cad.PlugIn
             PromptPointResult ppr2 = ed.GetCorner(pco);
             if (ppr2.Status != PromptStatus.OK) return;
 
-            // 1. 框选完成后，获取鼠标位置
-            System.Drawing.Point mousePos = System.Windows.Forms.Control.MousePosition;
+            //// 1. 框选完成后，获取鼠标位置
+            //System.Drawing.Point mousePos = System.Windows.Forms.Control.MousePosition;
 
-            // 2. 弹出输入框（可用InputBox或自定义窗体）
-            string instruction = ShowInputBoxAt(mousePos, "请输入指令：");
+            //// 2. 弹出输入框（可用InputBox或自定义窗体）
+            //string instruction = ShowInputBoxAt(mousePos, "请输入指令：");
             Point3d pt1 = ppr1.Value;
             Point3d pt2 = ppr2.Value;
 
@@ -567,7 +588,7 @@ namespace CoDesignStudy.Cad.PlugIn
             // 给矩形加一个偏差，缩小因为识别柱子坐标带来的内轮廓误差
             var shrunkPoints = ShrinkRectangle(intRectPoints, 125, 125);
             // 绘制一个矩形方便查看算法识别的最小外接矩形范围
-            DrawRectanglePolyline(shrunkPoints);
+            //DrawRectanglePolyline(shrunkPoints);
             // 外接矩形的坐标转为字符串（如 [[32267, 52942], [41142, 52942], ...]）
             string coordinatesStr = "[" + string.Join(", ", shrunkPoints.Select(
                                         pt => $"[{string.Join(", ", pt)}]"
@@ -583,15 +604,16 @@ namespace CoDesignStudy.Cad.PlugIn
             var prop = textObj.GetType().GetProperty("content");
             if (prop != null)
                 roomType = prop.GetValue(textObj)?.ToString();
-
+            //RoomInputCache.SetRoomDrawingInputs(roomType, coordinatesStr, doorPositionStr);
+            InsertTracker.SetRoomDrawingInputs(roomType, coordinatesStr, doorPositionStr);
             string CaculatePromptTemplate = Prompt.CaculatePrompt2;
             // 生成完整Prompt
-            string prompt = Prompt.GetLightingPrompt(roomType, coordinatesStr, doorPositionStr, instruction);
+            string prompt = Prompt.GetLightingPrompt(roomType, coordinatesStr, doorPositionStr, "");
 
             //PrjExploreHelper.InitPalette();
             //PaletteSetDlg dlg = new PaletteSetDlg();
             //PrjExploreHelper.MainPaletteset.Add("test", dlg);
-            string reply = await DlgInstance.SendAsync(prompt, instruction);
+            string reply = await DlgInstance.SendAsync(prompt, "");
 
             //dlg.BeginInvoke((MethodInvoker)(async () =>
             //{
@@ -602,7 +624,7 @@ namespace CoDesignStudy.Cad.PlugIn
 
             //// 非流式调用模型
             //string reply = Task.Run(() => PaletteSetDlg.CallLLMAsync(prompt)).GetAwaiter().GetResult();
-            string Thinking_content = "";
+            // 输出结构化JSON
 
             var match = Regex.Match(reply, @"```json\s*([\s\S]+?)\s*```");
 
@@ -613,9 +635,25 @@ namespace CoDesignStudy.Cad.PlugIn
             }
 
             string ModelReplyJson = match.Groups[1].Value;
-            Thinking_content = Regex.Replace(reply, @"```json\s*([\s\S]+?)\s*```", "").Trim();
+            InsertLightingFromModelReply(ModelReplyJson);
+            string json = Newtonsoft.Json.JsonConvert.SerializeObject(result, Newtonsoft.Json.Formatting.Indented);
 
-            var obj = JsonConvert.DeserializeObject<LightingDesignResponse>(ModelReplyJson);
+            // 导出到文件
+            try
+            {
+                string filePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "cad_rect_result.json");
+                File.WriteAllText(filePath, json, System.Text.Encoding.UTF8);
+                ed.WriteMessage($"\n已导出到: {filePath}");
+            }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage($"\n导出JSON文件失败: {ex.Message}");
+            }
+        }
+        public void InsertLightingFromModelReply(string modelReplyJson)
+        {
+            var obj = JsonConvert.DeserializeObject<LightingDesignResponse>(modelReplyJson);
+
             // 插入注释信息
             List<double> annotation_coords = obj.lighting_design.annotation_position_mm;
             if (annotation_coords != null && annotation_coords.Count == 2)
@@ -626,15 +664,10 @@ namespace CoDesignStudy.Cad.PlugIn
             // 保存灯具坐标点以供线路连接
             List<Point3d> insertPoints = new List<Point3d>();
             string lightType = obj.lighting_design.fixture_type;
-            string lightName = "";
-            if (lightType.Contains("吸顶"))
-                lightName = "感应式吸顶灯";
-            else if (lightType.Contains("防爆"))
-                lightName = "防爆灯";
-            else if (lightType.Contains("面板") || lightType.Contains("荧光"))
-                lightName = "双管荧光灯";
-            else
-                lightName = "gen_light";
+            string lightName = lightType.Contains("吸顶") ? "感应式吸顶灯" :
+                   lightType.Contains("防爆") ? "防爆灯" :
+                   (lightType.Contains("面板") || lightType.Contains("荧光")) ? "双管荧光灯" :
+                   "gen_light";
             string LightLayer = "照明";
             int lightCount = obj.lighting_design.fixture_count;
             int lightRotation = obj.lighting_design.fixture_rotations_degrees;
@@ -648,11 +681,16 @@ namespace CoDesignStudy.Cad.PlugIn
                     double z = 0;
                     insertPoints.Add(new Point3d(x, y, z));
 
-                    InsertBlockFromDwg(new Point3d(x, y, z), LightLayer, lightName, lightRotation);
+                    ObjectId id = InsertBlockFromDwg(new Point3d(x, y, z), LightLayer, lightName, lightRotation);
+                    // 记录本次插入的图元ID
+                    InsertTracker.AddEntity(id);
                     // 统计信息
                 }
             }
-            AddOrUpdateComponent(lightName, lightCount, obj.lighting_design.power_w.ToString()+"W");
+            // 统计所有的插入灯具信息
+            AddOrUpdateComponent(lightName, lightCount, obj.lighting_design.power_w.ToString() + "W");
+            // 统计上一次插入的灯具信息
+            InsertTracker.AddComponentCount(lightName, lightCount);
             // 绘制灯具之间的连线
             string wiringLayer = "照明连线";
             double lightLength = 0;
@@ -667,7 +705,9 @@ namespace CoDesignStudy.Cad.PlugIn
                     {
                         Point3d p1 = new Point3d(start[0], start[1], 0);
                         Point3d p2 = new Point3d(end[0], end[1], 0);
-                        lightLength += DrawPolyLineBetweenPoints(p1, p2, wiringLayer, 35f, lightcolor);
+                        (ObjectId polyId, int length) = DrawPolyLineBetweenPoints(p1, p2, wiringLayer, 20f, lightcolor);
+                        lightLength += length; // 累加长度
+                        InsertTracker.AddEntity(polyId);
                     }
                 }
             }
@@ -682,12 +722,17 @@ namespace CoDesignStudy.Cad.PlugIn
                     {
                         Point3d p1 = new Point3d(start[0], start[1], 0);
                         Point3d p2 = new Point3d(end[0], end[1], 0);
-                        lightLength += DrawPolyLineBetweenPoints(p1, p2, wiringLayer, 35f, lightcolor);
+                        (ObjectId polyId, int length) = DrawPolyLineBetweenPoints(p1, p2, wiringLayer, 20f, lightcolor);
+                        lightLength += length; // 累加长度
+                        InsertTracker.AddEntity(polyId);
                     }
                 }
             }
             lightLength = Math.Round(lightLength / 1000.0, 1);
+            // 统计插入的照明线路
             AddOrUpdateComponent("照明线路", lightLength, "BV-500 4mm²");
+            // 统计上一次插入的照明线路信息
+            InsertTracker.AddComponentCount("照明线路", lightLength);
             // 插入插座
             int switch_count = obj.switch_position.fixture_count;
             if (obj.socket_positions != null)
@@ -702,11 +747,15 @@ namespace CoDesignStudy.Cad.PlugIn
                         double z = 0;
                         double rotationDeg = socket.rotation_degrees;
 
-                        InsertBlockFromDwg(new Point3d(x, y, z), socketLayer, "三相五孔插座", rotationDeg);
+                        ObjectId id = InsertBlockFromDwg(new Point3d(x, y, z), socketLayer, "三相五孔插座", rotationDeg);
+                        InsertTracker.AddEntity(id);
                     }
                 }
             }
+            // 统计插座信息
             AddOrUpdateComponent("三相五孔插座", switch_count, "220V 10A");
+            // 统计上一次插入的插座信息
+            InsertTracker.AddComponentCount("三相五孔插座", switch_count);
             // 绘制插座之间的连线
             wiringLayer = "插座连线";
             double socketLength = 0;
@@ -721,12 +770,17 @@ namespace CoDesignStudy.Cad.PlugIn
                     {
                         Point3d p1 = new Point3d(start[0], start[1], 0);
                         Point3d p2 = new Point3d(end[0], end[1], 0);
-                        socketLength += DrawPolyLineBetweenPoints(p1, p2, wiringLayer, 20f, socketcolor);
+                        (ObjectId polyId, int length) = DrawPolyLineBetweenPoints(p1, p2, wiringLayer, 20f, socketcolor);
+                        socketLength += length; // 累加长度
+                        InsertTracker.AddEntity(polyId);
                     }
                 }
             }
             socketLength = Math.Round(socketLength / 1000.0, 1);
+            // 统计插入的插座线路
             AddOrUpdateComponent("插座线路", socketLength, "BV-500 2mm²");
+            // 统计上一次插入的插座线路信息
+            InsertTracker.AddComponentCount("插座线路", socketLength);
             // 插入开关
             if (obj.switch_position?.position_mm != null && obj.switch_position.position_mm.Count >= 2)
             {
@@ -734,31 +788,15 @@ namespace CoDesignStudy.Cad.PlugIn
                 double x = obj.switch_position.position_mm[0];
                 double y = obj.switch_position.position_mm[1];
                 double z = 0;
-                InsertBlockFromDwg(new Point3d(x, y, z), switchLayer, "开关");
+                ObjectId id = InsertBlockFromDwg(new Point3d(x, y, z), switchLayer, "开关");
+                InsertTracker.AddEntity(id);
             }
+            // 统计开关信息
             AddOrUpdateComponent("开关", 1, "220V 10A");
-            // 最短路径生成线路
-            //DrawOpenPolyline(insertPoints, "照明-WIRE");
-            // 插入注释
-            //InsertLightingInfo()
-
-            // 输出结构化JSON
-            string json = Newtonsoft.Json.JsonConvert.SerializeObject(result, Newtonsoft.Json.Formatting.Indented);
-
-            // 导出到文件
-            try
-            {
-                string filePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "cad_rect_result.json");
-                File.WriteAllText(filePath, json, System.Text.Encoding.UTF8);
-                ed.WriteMessage($"\n已导出到: {filePath}");
-            }
-            catch (System.Exception ex)
-            {
-                ed.WriteMessage($"\n导出JSON文件失败: {ex.Message}");
-            }
-
-            // 记录
-
+            // 统计上一次插入的开关信息
+            InsertTracker.AddComponentCount("开关", 1);
+            // 完成本次记录
+            InsertTracker.CommitInsert();
         }
         private void AddOrUpdateComponent(string type, double count, string info)
         {
@@ -804,18 +842,19 @@ namespace CoDesignStudy.Cad.PlugIn
             return "";
         }
 
-        public void InsertBlockFromDwg(Point3d insertPoint, string targetLayer, string blockName, double rotationDegrees = 0)
+        public ObjectId InsertBlockFromDwg(Point3d insertPoint, string targetLayer, string blockName, double rotationDegrees = 0)
         {
             Document doc = CADApplication.DocumentManager.MdiActiveDocument;
             Database db = doc.Database;
+            ObjectId blockId = ObjectId.Null;
             // 构建 DWG 文件路径
-            string blocksDirectory = @"C:\Users\武丢丢\Documents\gen_light\";  // ✅ 修改为你实际的路径
+            string blocksDirectory = @"C:\Users\武丢丢\Documents\gen_light\";
             string dwgFilePath = Path.Combine(blocksDirectory, blockName + ".dwg");
 
             if (!File.Exists(dwgFilePath))
             {
                 Autodesk.AutoCAD.ApplicationServices.Application.ShowAlertDialog($"找不到块文件：{dwgFilePath}");
-                return;
+                return ObjectId.Null;
             }
 
             using (DocumentLock docLock = doc.LockDocument())
@@ -849,12 +888,13 @@ namespace CoDesignStudy.Cad.PlugIn
                         Layer = targetLayer,
                         Rotation = rotationRadians
                     };
-                    modelSpace.AppendEntity(br);
+                    blockId = modelSpace.AppendEntity(br);
                     tr.AddNewlyCreatedDBObject(br, true);
 
                     tr.Commit();
                 }
             }
+            return blockId;
         }
         [CommandMethod("test", CommandFlags.Session)]
         public void InsertBlockFromDwgTest()
@@ -1184,11 +1224,12 @@ namespace CoDesignStudy.Cad.PlugIn
                 tr.Commit();
             }
         }
-        public int DrawPolyLineBetweenPoints(Point3d pt1, Point3d pt2, string layerName, double lineWidth, Autodesk.AutoCAD.Colors.Color color)
+        public (ObjectId, int) DrawPolyLineBetweenPoints(Point3d pt1, Point3d pt2, string layerName, double lineWidth, Autodesk.AutoCAD.Colors.Color color)
         {
             Document doc = CADApplication.DocumentManager.MdiActiveDocument;
             Database db = doc.Database;
             int polylineLength = 0;
+            ObjectId polyId = ObjectId.Null;
 
             using (DocumentLock docLock = doc.LockDocument())
             using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -1214,13 +1255,13 @@ namespace CoDesignStudy.Cad.PlugIn
                 poly.Color = color;
                 poly.ConstantWidth = (float)lineWidth;
 
-                modelSpace.AppendEntity(poly);
+                polyId = modelSpace.AppendEntity(poly);
                 tr.AddNewlyCreatedDBObject(poly, true);
                 // 获取多段线长度
                 polylineLength = (int)poly.Length;
                 tr.Commit();
             }
-            return polylineLength;
+            return (polyId, polylineLength);
         }
         [CommandMethod("MM", CommandFlags.Session)]
         public void TestMarkdig()
@@ -1254,15 +1295,18 @@ namespace CoDesignStudy.Cad.PlugIn
             //int textHeight = 300;
             //string layerName = "PUB_TEXT";
             // 插入中间的功率文本（如 "100W"）
-            InsertTextAt($"{powerW}W", basePosition, layerName, textHeight);
+            ObjectId id1 = InsertTextAt($"{powerW}W", basePosition, layerName, textHeight);
+            InsertTracker.AddEntity(id1);
 
             // 插入下方的安装高度文本（如 "4.5"）
             var below = new Point3d(basePosition.X, basePosition.Y - textHeight * 1.4, basePosition.Z);
-            InsertTextAt($"{mountingHeight:0.##}", below, layerName, textHeight);
+            ObjectId id2 = InsertTextAt($"{mountingHeight:0.##}", below, layerName, textHeight);
+            InsertTracker.AddEntity(id2);
 
             // 插入左侧的灯具数量文本（如 "4"）
             var left = new Point3d(basePosition.X - textHeight * 1.4, basePosition.Y - textHeight * 0.8, basePosition.Z);
-            InsertTextAt($"{fixtureCount}", left, layerName, textHeight);
+            ObjectId id3 = InsertTextAt($"{fixtureCount}", left, layerName, textHeight);
+            InsertTracker.AddEntity(id3);
 
             // 计算直线起止点（在瓦数和高度之间，略微留白）
             double halfLineLength = textHeight * 2.0;
@@ -1271,7 +1315,8 @@ namespace CoDesignStudy.Cad.PlugIn
             Point3d lineEnd = new Point3d(basePosition.X + halfLineLength +500, lineY, basePosition.Z);
 
             // 绘制黄色横线
-            DrawYellowLine(lineStart, lineEnd, layerName);
+            ObjectId id4 = DrawYellowLine(lineStart, lineEnd, layerName);
+            InsertTracker.AddEntity(id4);
         }
         /// <summary>
         /// 在指定坐标插入单行文本（DBText）
@@ -1279,10 +1324,11 @@ namespace CoDesignStudy.Cad.PlugIn
         /// <param name="text">要插入的文本内容</param>
         /// <param name="position">插入点坐标</param>
         /// <param name="layerName">可选，插入到的图层，默认为当前图层</param>
-        public void InsertTextAt(string text, Point3d position, string layerName = null, double textHeight = 300)
+        public ObjectId InsertTextAt(string text, Point3d position, string layerName = null, double textHeight = 300)
         {
             Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
             Database db = doc.Database;
+            ObjectId textID;
 
             using (DocumentLock docLock = doc.LockDocument())
             using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -1315,16 +1361,18 @@ namespace CoDesignStudy.Cad.PlugIn
                 //    dbText.Layer = layerName;
                 //}
 
-                modelSpace.AppendEntity(mtext);
+                textID = modelSpace.AppendEntity(mtext);
                 tr.AddNewlyCreatedDBObject(mtext, true);
 
                 tr.Commit();
             }
+            return textID;
         }
-        public void DrawYellowLine(Point3d start, Point3d end, string layerName)
+        public ObjectId DrawYellowLine(Point3d start, Point3d end, string layerName)
         {
             Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
             Database db = doc.Database;
+            ObjectId yellowlineID;
 
             using (DocumentLock docLock = doc.LockDocument())
             using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -1348,11 +1396,12 @@ namespace CoDesignStudy.Cad.PlugIn
                     Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 2) // 2 = 黄色
                 };
 
-                modelSpace.AppendEntity(line);
+                yellowlineID = modelSpace.AppendEntity(line);
                 tr.AddNewlyCreatedDBObject(line, true);
 
                 tr.Commit();
             }
+            return yellowlineID;
         }
         public void DrawComponentTable6ColsWithBlocks(List<(string Type, double Count, string Info)> statsList)
         {
