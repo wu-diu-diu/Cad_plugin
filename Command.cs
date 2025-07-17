@@ -38,8 +38,6 @@ namespace CoDesignStudy.Cad.PlugIn
     public class Command : IExtensionApplication
     {
         #region 成员变量
-        public string FinalPrompt;
-        public string FinalReply;
         public static PaletteSetDlg DlgInstance;
         public static Dictionary<string, (double Count, string Info)> componentStats = new Dictionary<string, (double, string)>();
         // 存储上一次插入的图元
@@ -608,12 +606,13 @@ namespace CoDesignStudy.Cad.PlugIn
             InsertTracker.SetRoomDrawingInputs(roomType, coordinatesStr, doorPositionStr);
             string CaculatePromptTemplate = Prompt.CaculatePrompt2;
             // 生成完整Prompt
-            string prompt = Prompt.GetLightingPrompt(roomType, coordinatesStr, doorPositionStr, "");
+            string prompt = Prompt.GetPreparePrompt(roomType, coordinatesStr, doorPositionStr);
+            InsertTracker.WaitingRoomPromptInfo = prompt;
+            await DlgInstance.AppendMessageAsync("AI", "**已识别房间信息，请继续输入您的设计指令，如无则回复无**");
 
             //PrjExploreHelper.InitPalette();
             //PaletteSetDlg dlg = new PaletteSetDlg();
             //PrjExploreHelper.MainPaletteset.Add("test", dlg);
-            string reply = await DlgInstance.SendAsync(prompt, "");
 
             //dlg.BeginInvoke((MethodInvoker)(async () =>
             //{
@@ -625,17 +624,17 @@ namespace CoDesignStudy.Cad.PlugIn
             //// 非流式调用模型
             //string reply = Task.Run(() => PaletteSetDlg.CallLLMAsync(prompt)).GetAwaiter().GetResult();
             // 输出结构化JSON
+            //string reply = await DlgInstance.SendAsync(prompt, "");
+            //var match = Regex.Match(reply, @"```json\s*([\s\S]+?)\s*```");
 
-            var match = Regex.Match(reply, @"```json\s*([\s\S]+?)\s*```");
+            //if (!match.Success)
+            //{
+            //    ed.WriteMessage("未找到JSON内容");
+            //    return;
+            //}
 
-            if (!match.Success)
-            {
-                ed.WriteMessage("未找到JSON内容");
-                return;
-            }
-
-            string ModelReplyJson = match.Groups[1].Value;
-            InsertLightingFromModelReply(ModelReplyJson);
+            //string ModelReplyJson = match.Groups[1].Value;
+            //InsertLightingFromModelReply(ModelReplyJson);
             string json = Newtonsoft.Json.JsonConvert.SerializeObject(result, Newtonsoft.Json.Formatting.Indented);
 
             // 导出到文件
@@ -649,6 +648,13 @@ namespace CoDesignStudy.Cad.PlugIn
             {
                 ed.WriteMessage($"\n导出JSON文件失败: {ex.Message}");
             }
+        }
+        public string StringToJSON(string reply)
+        {
+            var match = Regex.Match(reply, @"```json\s*([\s\S]+?)\s*```");
+
+            string ModelReplyJson = match.Groups[1].Value;
+            return ModelReplyJson;
         }
         public void InsertLightingFromModelReply(string modelReplyJson)
         {

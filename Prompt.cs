@@ -239,17 +239,13 @@ namespace CoDesignStudy.Cad.PlugIn
 }}
 ```
 ";
-        public static string GetLightingPrompt(string roomType, string coordinatesStr, string doorPositionStr, string instruction)
+        public static string GetPreparePrompt(string roomType, string coordinatesStr, string doorPositionStr)
         {
             return $@"你是一名专业的电气设计助手，任务是根据房间名称、房间的四个坐标点，以及门的位置，进行如下电气设计：
 
 - 房间照明布置（含照度分析、灯具选择与布局）；
 - 插座的合理布置（贴墙，符合施工要求）；
 - 开关的合理放置（靠近门）；
-
-用户还提供了额外的自定义指令,请优先参考指令进行设计,尤其是灯具类型和排布方式的选择:
-### 自定义指令:
-{instruction}
 
 请你遵循以下步骤：
 
@@ -321,6 +317,16 @@ namespace CoDesignStudy.Cad.PlugIn
 - 门的坐标：{doorPositionStr}
 ";
 }
+        public static string GetFinalPrompt(string preparePrompt, string instruction)
+        {
+            return $@"
+{preparePrompt}
+
+用户还提供了额外的自定义指令,请优先参考指令进行设计,尤其是灯具类型和排布方式的选择:
+### 自定义指令:
+{instruction}
+";
+        }
         public static readonly string CaculatePrompt = @"你是建筑照明设计领域的专家，现在请你根据给定房间的角点坐标和房间类型，生成符合下列 JSON 结构的灯具布置建议。
 
 请严格按照以下 JSON 格式返回结果，并且确保“必要字段”一定包含在输出中。

@@ -21,16 +21,6 @@ namespace CoDesignStudy.Cad.PlugIn
                    !string.IsNullOrEmpty(CoordinatesStr) &&
                    !string.IsNullOrEmpty(DoorPositionStr);
         }
-        public static void SetRoomDrawingInputs(string roomType, string coordinatesStr, string doorPositionStr)
-        {
-            RoomType = roomType;
-            CoordinatesStr = coordinatesStr;
-            DoorPositionStr = doorPositionStr;
-        }
-        public static (string roomType, string coordinatesStr, string doorPositionStr) GetLastRoomDrawingInputs()
-        {
-            return (RoomType, CoordinatesStr, DoorPositionStr);
-        }
 
     }
     public static class InsertTracker
@@ -43,6 +33,7 @@ namespace CoDesignStudy.Cad.PlugIn
         private static string lastRoomType = "";
         private static string lastCoordinatesStr = "";
         private static string lastDoorPositionStr = "";
+        public static string WaitingRoomPromptInfo = null;
 
         public static void BeginNewInsert()
         {
