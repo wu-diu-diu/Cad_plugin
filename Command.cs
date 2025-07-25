@@ -353,17 +353,11 @@ namespace CoDesignStudy.Cad.PlugIn
 
             public class RoomInfo
             {
-                public string room_type { get; set; }
-                public List<List<int>> coordinates_mm { get; set; }
-                public Dimensions dimensions { get; set; }
-                public int illuminance_standard_lx { get; set; }
-            }
-
-            public class Dimensions
-            {
-                public int length_mm { get; set; }
-                public int width_mm { get; set; }
-                public double area_m2 { get; set; }
+                public Dictionary<string, List<double[]>> Blocks { get; set; } = new Dictionary<string, List<double[]>>();
+                public Dictionary<string, int> BlockCount { get; set; } = new Dictionary<string, int>();
+                public Dictionary<string, double> PolylineLengthByLayer { get; set; } = new Dictionary<string, double>();
+                public List<object> Texts { get; set; } = new List<object>();
+                public List<double[]> RectPoints { get; set; } = new List<double[]>();
             }
 
             public class LightingDesign
@@ -1583,6 +1577,54 @@ namespace CoDesignStudy.Cad.PlugIn
             };
 
             return newPoints;
+        }
+        public void MergeLightingFromModelReply(string modelReplyJson)
+        {
+            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
+            Editor ed = doc.Editor;
+            try
+            {
+                // 反序列化模型回复
+                var lightingDesignResponse = JsonConvert.DeserializeObject<LightingDesignResponse>(modelReplyJson);
+
+                // 构造路径，读取房间分析结果 JSON 文件
+                string filePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "cad_rect_result.json");
+                if (File.Exists(filePath))
+                {
+                    string analysisJson = File.ReadAllText(filePath);
+                    // 直接反序列化为 RoomInfo（结构相同）
+                    var roomInfo = JsonConvert.DeserializeObject<LightingDesignResponse.RoomInfo>(analysisJson);
+                    lightingDesignResponse.room_info = roomInfo;
+                    string finalJson = JsonConvert.SerializeObject(lightingDesignResponse, Formatting.Indented);
+
+                    // 自动生成递增的文件名 final_result_1.json, final_result_2.json, ...
+                    string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+                    int index = 1;
+                    string savePath;
+
+                    do
+                    {
+                        savePath = Path.Combine(desktopPath, $"final_result_{index}.json");
+                        index++;
+                    }
+                    while (File.Exists(savePath));
+
+                    File.WriteAllText(savePath, finalJson, System.Text.Encoding.UTF8);
+                    ed.WriteMessage($"\n合并结果已导出到: {savePath}");
+                }
+                else
+                {
+                    ed.WriteMessage($"\n找不到分析结果文件: {filePath}");
+                }
+
+                // TODO: 在此处使用 lightingDesignResponse，比如生成CAD布图等后续逻辑
+
+                ed.WriteMessage("\n模型和分析数据已成功合并。");
+            }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage($"\n处理过程中发生错误: {ex.Message}");
+            }
         }
         #endregion
     }

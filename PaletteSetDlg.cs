@@ -182,9 +182,9 @@ namespace CoDesignStudy.Cad.PlugIn
                 // ✅ 强制滚动到底部，确保真正滑动了
                 // 调试发现conversationPanel.VerticalScroll.Value的值和conversationPanel.VerticalScroll.Maximum的值越差越大,且自动滚动停止后，value不再增大
                 // 由于webview高度更新频繁，所以滚动条的位置更新不及时，所以在这里强制滚动底部，这样每次webview增加一点高度，滚动条就算没跟上，强制滚动也不至于落下太多
-                conversationPanel.VerticalScroll.Value = conversationPanel.VerticalScroll.Maximum;
-                conversationPanel.PerformLayout();
-                conversationPanel.Refresh();
+                //conversationPanel.VerticalScroll.Value = conversationPanel.VerticalScroll.Maximum;
+                //conversationPanel.PerformLayout();
+                //conversationPanel.Refresh();
             }
             catch (Exception ex)
             {
@@ -259,6 +259,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 string ModelReplyJson = match.Groups[1].Value;
                 var commandInstance = new Command();
                 commandInstance.InsertLightingFromModelReply(ModelReplyJson);
+                commandInstance.MergeLightingFromModelReply(ModelReplyJson);
                 return;
             }
             if (userMessage.EndsWith("材料清单"))
@@ -272,6 +273,9 @@ namespace CoDesignStudy.Cad.PlugIn
             }
             if (userMessage.StartsWith("修改"))
             {
+                // 删除以“修改”、“修改,”、“修改， ”开头的内容
+                userMessage = Regex.Replace(userMessage, @"^修改[,，]?\s*", "");
+
                 Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.SendStringToExecute("delete_test ", true, false, false);
                 var (roomType, coords, doorCoords) = InsertTracker.GetLastRoomDrawingInputs();
                 userMessage = Prompt.GetFinalPrompt(Prompt.GetPreparePrompt(roomType, coords, doorCoords), userMessage);
@@ -281,6 +285,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 string ModelReplyJson = match.Groups[1].Value;
                 var commandInstance = new Command();
                 commandInstance.InsertLightingFromModelReply(ModelReplyJson);
+                commandInstance.MergeLightingFromModelReply(ModelReplyJson);
                 return;
             }
 
@@ -373,6 +378,9 @@ namespace CoDesignStudy.Cad.PlugIn
                                                         {
                                                             // 滚动conversationpanel到webview
                                                             SmartAutoScroll(webView);
+                                                            webView.CoreWebView2?.ExecuteScriptAsync(
+                                                                            "window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });"
+                                                                        );
                                                         }
                                                         catch (Exception ex)
                                                         {
