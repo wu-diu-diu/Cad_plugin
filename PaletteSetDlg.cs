@@ -257,15 +257,17 @@ namespace CoDesignStudy.Cad.PlugIn
                 var match = Regex.Match(reply, @"```json\s*([\s\S]+?)\s*```");
 
                 string ModelReplyJson = match.Groups[1].Value;
-                var commandInstance = new Command();
-                commandInstance.InsertLightingFromModelReply(ModelReplyJson);
-                commandInstance.MergeLightingFromModelReply(ModelReplyJson);
+                CadDrawingHelper.InsertLightingFromModelReply(ModelReplyJson);
+                CadDrawingHelper.MergeLightingFromModelReply(ModelReplyJson);
                 return;
             }
             if (userMessage.EndsWith("材料清单"))
             {
 
                 // 调用导出方法（注意：如果该方法不是线程安全的，可以考虑封装到 Task.Run）
+                var statsList = CadDrawingHelper.componentStats
+                        .Select(kv => (Type: kv.Key, Count: kv.Value.Count, Info: kv.Value.Info))
+                        .ToList();
                 Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.SendStringToExecute("EE ", true, false, false);
                 await Task.Delay(2000);
                 await AppendMessageAsync("AI", "已为您生成材料清单");
@@ -283,9 +285,8 @@ namespace CoDesignStudy.Cad.PlugIn
                 var match = Regex.Match(reply, @"```json\s*([\s\S]+?)\s*```");
 
                 string ModelReplyJson = match.Groups[1].Value;
-                var commandInstance = new Command();
-                commandInstance.InsertLightingFromModelReply(ModelReplyJson);
-                commandInstance.MergeLightingFromModelReply(ModelReplyJson);
+                CadDrawingHelper.InsertLightingFromModelReply(ModelReplyJson);
+                CadDrawingHelper.MergeLightingFromModelReply(ModelReplyJson);
                 return;
             }
 

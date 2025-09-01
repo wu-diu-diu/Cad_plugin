@@ -1,30 +1,13 @@
 ﻿using Autodesk.AutoCAD.ApplicationServices;
-using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.Runtime;
-using Autodesk.AutoCAD.Windows;
-using Autodesk.Windows;
-using BoundingRectangle;
-using DocumentFormat.OpenXml.Office2010.Excel;
-using Markdig;
-using Newtonsoft.Json;
-using NPOI.SS.UserModel;
-using NPOI.XSSF.UserModel;
-using OfficeOpenXml;
-using OfficeOpenXml.Style;
 using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using System.Windows.Forms;
-using System.Xml.Linq;
-using System.Xml.Schema;
-using static System.Net.Mime.MediaTypeNames;
 using CADApplication = Autodesk.AutoCAD.ApplicationServices.Application;
 
 [assembly: ExtensionApplication(typeof(CoDesignStudy.Cad.PlugIn.Command))]
@@ -39,16 +22,15 @@ namespace CoDesignStudy.Cad.PlugIn
     {
         #region 成员变量
         public static PaletteSetDlg DlgInstance;
-        public static Dictionary<string, (double Count, string Info)> componentStats = new Dictionary<string, (double, string)>();
         // 存储上一次插入的图元
-        List<ObjectId> lastInsertedEntities = new List<ObjectId>();
+        //List<ObjectId> lastInsertedEntities = new List<ObjectId>();
 
         #endregion
 
         #region 初始化
         public void Initialize()
         {
-            PrjExploreHelper.InitMenu();
+            //PrjExploreHelper.InitMenu();
         }
 
         public void Terminate()
@@ -79,37 +61,6 @@ namespace CoDesignStudy.Cad.PlugIn
             catch (System.Exception ex)
             {
                 MessageBox.Show("测试", ex.Message);
-            }
-        }
-        public static void ShowModelReplyInPanel(string reply)
-        {
-            try
-            {
-                Document curDoc = CADApplication.DocumentManager.MdiActiveDocument;
-                if (curDoc == null)
-                {
-                    throw new System.Exception("当前未开启任何文件！");
-                }
-
-                // 初始化 PaletteSet（只初始化一次）
-                if (PrjExploreHelper.MainPaletteset == null)
-                {
-                    PrjExploreHelper.InitPalette();
-                }
-
-                // 初始化面板实例（只初始化一次）
-                if (Command.DlgInstance == null)
-                {
-                    Command.DlgInstance = new PaletteSetDlg();
-                    PrjExploreHelper.MainPaletteset.Add("测试界面", Command.DlgInstance);
-                }
-
-                // 展示模型输出内容
-                Command.DlgInstance.AppendMessageSync("AI", reply).Wait();
-            }
-            catch (System.Exception ex)
-            {
-                MessageBox.Show("显示面板失败", ex.Message);
             }
         }
 
@@ -209,131 +160,6 @@ namespace CoDesignStudy.Cad.PlugIn
             // 正则表达式匹配中文字符（包括标点符号）
             return Regex.IsMatch(text, @"[\u4e00-\u9fa5]");
         }
-
-        [CommandMethod("QQ", CommandFlags.Session)]
-        public void DrawCircleWithLisp()
-        {
-            // 获取当前文档
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;  // 打开当前激活的文档
-            // AutoLISP 代码：在(100,100)处画半径为50的圆
-            string lisp = "(command \"CIRCLE\" '(100 100 0) 1500) ";
-            // 执行 AutoLISP 代码
-            doc.SendStringToExecute(lisp, true, false, false);
-        }
-        [CommandMethod("EE", CommandFlags.Session)]
-        public void ExportExcel()
-        {
-            var statsList = componentStats
-                        .Select(kv => (Type: kv.Key, Count: kv.Value.Count, Info: kv.Value.Info))
-                        .ToList();
-
-            //ExportStatisticsToExcel(statsList, @"D:\最终统计.xlsx");
-            Point3d insertPoint = new Point3d(34640, 55259, 0);
-
-            DrawComponentTable6ColsWithBlocks(statsList);
-        }
-
-        [CommandMethod("PRINT_ALL_BLOCK_NAMES", CommandFlags.Session)]
-        public void PrintAllBlockNames()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-
-                doc.Editor.WriteMessage("\n当前图纸中的所有块名称：");
-                foreach (ObjectId btrId in bt)
-                {
-                    BlockTableRecord btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForRead);
-                    // 过滤掉匿名块和布局块（如需全部显示可去掉此判断）
-                    if (!btr.IsAnonymous && !btr.IsLayout)
-                    {
-                        doc.Editor.WriteMessage($"\n{btr.Name}");
-                    }
-                }
-                tr.Commit();
-            }
-        }
-        [CommandMethod("EXTRACT_LAYER_ENTS", CommandFlags.Session)]
-        public void ExtractEntitiesFromLayer()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            Editor ed = doc.Editor;
-
-            // 提示用户输入图层名
-            PromptStringOptions pso = new PromptStringOptions("\n请输入要提取的图层名：");
-            pso.AllowSpaces = true;
-            PromptResult pr = ed.GetString(pso);
-
-            string targetLayer = pr.StringResult.Trim();
-
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
-
-                List<Entity> foundEntities = new List<Entity>();
-
-                foreach (ObjectId id in modelSpace)
-                {
-                    Entity ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                    if (ent != null && ent.Layer == targetLayer)
-                    {
-                        foundEntities.Add(ent);
-                    }
-                }
-
-                ed.WriteMessage($"\n图层 \"{targetLayer}\" 内共找到 {foundEntities.Count} 个图元：");
-                foreach (var ent in foundEntities)
-                {
-                    if (ent is BlockReference br)
-                    {
-                        // 获取块名
-                        string blockName = "";
-                        if (br.BlockTableRecord.IsValid)
-                        {
-                            BlockTableRecord brDef = (BlockTableRecord)tr.GetObject(br.BlockTableRecord, OpenMode.ForRead);
-                            blockName = brDef.Name;
-                        }
-                        ed.WriteMessage($"\n类型: BlockReference, 块名: {blockName}, 对象ID: {ent.ObjectId}");
-                    }
-                    else
-                    {
-                        ed.WriteMessage($"\n类型: {ent.GetType().Name}, 对象ID: {ent.ObjectId}");
-                    }
-                }
-
-                // 便于debug时查看
-                System.Diagnostics.Debugger.Break();
-
-                tr.Commit();
-            }
-        }
-        [CommandMethod("delete_test")]
-        public void DeleteTest()
-        {
-            var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
-            var db = doc.Database;
-            var ed = doc.Editor;
-            if (!InsertTracker.HasLastInsert())
-            {
-                ed.WriteMessage("\n没有可删除的图元。");
-                return;
-            }
-
-            InsertTracker.DeleteLastInserted(db, componentStats);
-            ed.WriteMessage("\n已删除上一次插入的图元及其统计信息。");
-        }
-        private static Point3d GetCenterFromExtents(Extents3d ext)
-        {
-            double centerX = (ext.MinPoint.X + ext.MaxPoint.X) / 2.0;
-            double centerY = (ext.MinPoint.Y + ext.MaxPoint.Y) / 2.0;
-            double centerZ = (ext.MinPoint.Z + ext.MaxPoint.Z) / 2.0;
-            return new Point3d(centerX, centerY, centerZ);
-        }
         public class AnalysisResult
         {
             public Dictionary<string, List<double[]>> Blocks { get; set; } = new Dictionary<string, List<double[]>>();
@@ -388,7 +214,10 @@ namespace CoDesignStudy.Cad.PlugIn
             }
         }
 
-
+        /// <summary>
+        /// 最重要的命令，用户运行这个命令选定一个区域，程序会识别区域内指定的元件的坐标信息，嵌入到prompt模板中
+        /// 同时
+        /// </summary>
         [CommandMethod("SELECT_RECT_PRINT", CommandFlags.Session)]
         public async void SelectEntitiesByRectangleAndPrintInfo()
         {
@@ -421,11 +250,7 @@ namespace CoDesignStudy.Cad.PlugIn
             PromptPointResult ppr2 = ed.GetCorner(pco);
             if (ppr2.Status != PromptStatus.OK) return;
 
-            //// 1. 框选完成后，获取鼠标位置
-            //System.Drawing.Point mousePos = System.Windows.Forms.Control.MousePosition;
 
-            //// 2. 弹出输入框（可用InputBox或自定义窗体）
-            //string instruction = ShowInputBoxAt(mousePos, "请输入指令：");
             Point3d pt1 = ppr1.Value;
             Point3d pt2 = ppr2.Value;
 
@@ -489,7 +314,7 @@ namespace CoDesignStudy.Cad.PlugIn
                             result.Blocks[blockName] = new List<double[]>();
                         try
                         {
-                            var center = GetCenterFromExtents(br.GeometricExtents);
+                            var center = CadDrawingHelper.GetCenterFromExtents(br.GeometricExtents);
                             result.Blocks[blockName].Add(new double[] { center.X, center.Y, center.Z });
                         }
                         catch { }
@@ -508,7 +333,7 @@ namespace CoDesignStudy.Cad.PlugIn
                                 result.Blocks[blockName] = new List<double[]>();
                             try
                             {
-                                var center = GetCenterFromExtents(hatch.GeometricExtents);
+                                var center = CadDrawingHelper.GetCenterFromExtents(hatch.GeometricExtents);
                                 result.Blocks[blockName].Add(new double[] { center.X, center.Y, center.Z });
                             }
                             catch { }
@@ -578,7 +403,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 .Select(pt => pt.Select(x => (int)x).ToArray())
                 .ToList();
             // 给矩形加一个偏差，缩小因为识别柱子坐标带来的内轮廓误差
-            var shrunkPoints = ShrinkRectangle(intRectPoints, 125, 125);
+            var shrunkPoints = CadDrawingHelper.ShrinkRectangle(intRectPoints, 125, 125);
             // 绘制一个矩形方便查看算法识别的最小外接矩形范围
             //DrawRectanglePolyline(shrunkPoints);
             // 外接矩形的坐标转为字符串（如 [[32267, 52942], [41142, 52942], ...]）
@@ -629,273 +454,21 @@ namespace CoDesignStudy.Cad.PlugIn
 
             //string ModelReplyJson = match.Groups[1].Value;
             //InsertLightingFromModelReply(ModelReplyJson);
-            string json = Newtonsoft.Json.JsonConvert.SerializeObject(result, Newtonsoft.Json.Formatting.Indented);
+            //string json = Newtonsoft.Json.JsonConvert.SerializeObject(result, Newtonsoft.Json.Formatting.Indented);
 
             // 导出到文件
-            try
-            {
-                string filePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "cad_rect_result.json");
-                File.WriteAllText(filePath, json, System.Text.Encoding.UTF8);
-                ed.WriteMessage($"\n已导出到: {filePath}");
-            }
-            catch (System.Exception ex)
-            {
-                ed.WriteMessage($"\n导出JSON文件失败: {ex.Message}");
-            }
-        }
-        public string StringToJSON(string reply)
-        {
-            var match = Regex.Match(reply, @"```json\s*([\s\S]+?)\s*```");
-
-            string ModelReplyJson = match.Groups[1].Value;
-            return ModelReplyJson;
-        }
-        public void InsertLightingFromModelReply(string modelReplyJson)
-        {
-            var obj = JsonConvert.DeserializeObject<LightingDesignResponse>(modelReplyJson);
-
-            // 插入注释信息
-            List<double> annotation_coords = obj.lighting_design.annotation_position_mm;
-            if (annotation_coords != null && annotation_coords.Count == 2)
-            {
-                Point3d annotationPoint = new Point3d(annotation_coords[0], annotation_coords[1], 0);
-                InsertLightingInfo(annotationPoint, obj.lighting_design.fixture_count, obj.lighting_design.power_w, obj.lighting_design.mounting_height_mm / 1000);
-            }
-            // 保存灯具坐标点以供线路连接
-            List<Point3d> insertPoints = new List<Point3d>();
-            string lightType = obj.lighting_design.fixture_type;
-            string lightName = lightType.Contains("吸顶") ? "感应式吸顶灯" :
-                   lightType.Contains("防爆") ? "防爆灯" :
-                   (lightType.Contains("面板") || lightType.Contains("荧光")) ? "双管荧光灯" :
-                   "gen_light";
-            string LightLayer = "照明";
-            int lightCount = obj.lighting_design.fixture_count;
-            int lightRotation = obj.lighting_design.fixture_rotations_degrees;
-            // 插入灯具
-            foreach (var point in obj.lighting_design.fixture_positions_mm)
-            {
-                if (point.Count >= 2)
-                {
-                    double x = point[0];
-                    double y = point[1];
-                    double z = 0;
-                    insertPoints.Add(new Point3d(x, y, z));
-
-                    ObjectId id = InsertBlockFromDwg(new Point3d(x, y, z), LightLayer, lightName, lightRotation);
-                    // 记录本次插入的图元ID
-                    InsertTracker.AddEntity(id);
-                    // 统计信息
-                }
-            }
-            // 统计所有的插入灯具信息
-            AddOrUpdateComponent(lightName, lightCount, obj.lighting_design.power_w.ToString() + "W");
-            // 统计上一次插入的灯具信息
-            InsertTracker.AddComponentCount(lightName, lightCount);
-            // 绘制灯具之间的连线
-            string wiringLayer = "照明连线";
-            double lightLength = 0;
-            var lightcolor = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 2);
-            foreach (var line in obj.lighting_design.fixture_wiring_lines_mm)
-            {
-                if (line.Count >= 2)
-                {
-                    var start = line[0];
-                    var end = line[1];
-                    if (start.Count >= 2 && end.Count >= 2)
-                    {
-                        Point3d p1 = new Point3d(start[0], start[1], 0);
-                        Point3d p2 = new Point3d(end[0], end[1], 0);
-                        (ObjectId polyId, int length) = DrawPolyLineBetweenPoints(p1, p2, wiringLayer, 20f, lightcolor);
-                        lightLength += length; // 累加长度
-                        InsertTracker.AddEntity(polyId);
-                    }
-                }
-            }
-            // 绘制引出线
-            foreach (var line in obj.lighting_design.power_outlet_connection_line_mm)
-            {
-                if (line.Count >= 2)
-                {
-                    var start = line[0];
-                    var end = line[1];
-                    if (start.Count >= 2 && end.Count >= 2)
-                    {
-                        Point3d p1 = new Point3d(start[0], start[1], 0);
-                        Point3d p2 = new Point3d(end[0], end[1], 0);
-                        (ObjectId polyId, int length) = DrawPolyLineBetweenPoints(p1, p2, wiringLayer, 20f, lightcolor);
-                        lightLength += length; // 累加长度
-                        InsertTracker.AddEntity(polyId);
-                    }
-                }
-            }
-            lightLength = Math.Round(lightLength / 1000.0, 1);
-            // 统计插入的照明线路
-            AddOrUpdateComponent("照明线路", lightLength, "BV-500 4mm²");
-            // 统计上一次插入的照明线路信息
-            InsertTracker.AddComponentCount("照明线路", lightLength);
-            // 插入插座
-            int switch_count = obj.switch_position.fixture_count;
-            if (obj.socket_positions != null)
-            {
-                string socketLayer = "插座"; // 替换为你项目中的图层名
-                foreach (var socket in obj.socket_positions)
-                {
-                    if (socket.position_mm.Count >= 2)
-                    {
-                        double x = socket.position_mm[0];
-                        double y = socket.position_mm[1];
-                        double z = 0;
-                        double rotationDeg = socket.rotation_degrees;
-
-                        ObjectId id = InsertBlockFromDwg(new Point3d(x, y, z), socketLayer, "三相五孔插座", rotationDeg);
-                        InsertTracker.AddEntity(id);
-                    }
-                }
-            }
-            // 统计插座信息
-            AddOrUpdateComponent("三相五孔插座", switch_count, "220V 10A");
-            // 统计上一次插入的插座信息
-            InsertTracker.AddComponentCount("三相五孔插座", switch_count);
-            // 绘制插座之间的连线
-            wiringLayer = "插座连线";
-            double socketLength = 0;
-            var socketcolor = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 6);
-            foreach (var line in obj.socket_wiring_lines_mm)
-            {
-                if (line.Count >= 2)
-                {
-                    var start = line[0];
-                    var end = line[1];
-                    if (start.Count >= 2 && end.Count >= 2)
-                    {
-                        Point3d p1 = new Point3d(start[0], start[1], 0);
-                        Point3d p2 = new Point3d(end[0], end[1], 0);
-                        (ObjectId polyId, int length) = DrawPolyLineBetweenPoints(p1, p2, wiringLayer, 20f, socketcolor);
-                        socketLength += length; // 累加长度
-                        InsertTracker.AddEntity(polyId);
-                    }
-                }
-            }
-            socketLength = Math.Round(socketLength / 1000.0, 1);
-            // 统计插入的插座线路
-            AddOrUpdateComponent("插座线路", socketLength, "BV-500 2mm²");
-            // 统计上一次插入的插座线路信息
-            InsertTracker.AddComponentCount("插座线路", socketLength);
-            // 插入开关
-            if (obj.switch_position?.position_mm != null && obj.switch_position.position_mm.Count >= 2)
-            {
-                string switchLayer = "开关"; // 替换为你项目中的图层名
-                double x = obj.switch_position.position_mm[0];
-                double y = obj.switch_position.position_mm[1];
-                double z = 0;
-                ObjectId id = InsertBlockFromDwg(new Point3d(x, y, z), switchLayer, "开关");
-                InsertTracker.AddEntity(id);
-            }
-            // 统计开关信息
-            AddOrUpdateComponent("开关", 1, "220V 10A");
-            // 统计上一次插入的开关信息
-            InsertTracker.AddComponentCount("开关", 1);
-            // 完成本次记录
-            InsertTracker.CommitInsert();
-        }
-        private void AddOrUpdateComponent(string type, double count, string info)
-        {
-            if (componentStats.ContainsKey(type))
-            {
-                var old = componentStats[type];
-                componentStats[type] = (old.Count + count, old.Info); // 保持原 info
-            }
-            else
-            {
-                componentStats[type] = (count, info);
-            }
+            //try
+            //{
+            //    string filePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "cad_rect_result.json");
+            //    File.WriteAllText(filePath, json, System.Text.Encoding.UTF8);
+            //    ed.WriteMessage($"\n已导出到: {filePath}");
+            //}
+            //catch (System.Exception ex)
+            //{
+            //    ed.WriteMessage($"\n导出JSON文件失败: {ex.Message}");
+            //}
         }
 
-        public string ShowInputBoxAt(System.Drawing.Point location, string title)
-        {
-            Form inputForm = new Form();
-            inputForm.StartPosition = FormStartPosition.Manual;
-            inputForm.Location = location;
-            inputForm.Width = 400;
-            inputForm.Height = 150;
-            inputForm.Text = title;
-
-            TextBox textBox = new TextBox { Dock = DockStyle.Fill, Multiline = true };
-            Button okButton = new Button { Text = "确定", Dock = DockStyle.Bottom };
-            okButton.Click += (s, e) => inputForm.DialogResult = DialogResult.OK;
-
-            // 支持回车直接提交
-            textBox.KeyDown += (s, e) =>
-            {
-                if (e.KeyCode == Keys.Enter && !e.Shift)
-                {
-                    e.SuppressKeyPress = true;
-                    inputForm.DialogResult = DialogResult.OK;
-                }
-            };
-
-            inputForm.Controls.Add(textBox);
-            inputForm.Controls.Add(okButton);
-
-            if (inputForm.ShowDialog() == DialogResult.OK)
-                return textBox.Text.Trim();
-            return "";
-        }
-
-        public ObjectId InsertBlockFromDwg(Point3d insertPoint, string targetLayer, string blockName, double rotationDegrees = 0)
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            ObjectId blockId = ObjectId.Null;
-            // 构建 DWG 文件路径
-            string blocksDirectory = @"C:\Users\武丢丢\Documents\gen_light\";
-            string dwgFilePath = Path.Combine(blocksDirectory, blockName + ".dwg");
-
-            if (!File.Exists(dwgFilePath))
-            {
-                Autodesk.AutoCAD.ApplicationServices.Application.ShowAlertDialog($"找不到块文件：{dwgFilePath}");
-                return ObjectId.Null;
-            }
-
-            using (DocumentLock docLock = doc.LockDocument())
-            {
-                // 导入块定义到当前数据库
-                using (Database sourceDb = new Database(false, true))
-                {
-                    sourceDb.ReadDwgFile(dwgFilePath, System.IO.FileShare.Read, true, "");
-                    db.Insert(blockName, sourceDb, true);
-                }
-
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                    BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
-
-                    // 确保图层存在，不存在则创建
-                    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                    if (!lt.Has(targetLayer))
-                    {
-                        lt.UpgradeOpen();
-                        LayerTableRecord newLayer = new LayerTableRecord { Name = targetLayer };
-                        lt.Add(newLayer);
-                        tr.AddNewlyCreatedDBObject(newLayer, true);
-                    }
-
-                    // 插入块参照，设置旋转角度（单位为弧度）
-                    double rotationRadians = rotationDegrees * Math.PI / 180.0;
-                    BlockReference br = new BlockReference(insertPoint, bt[blockName])
-                    {
-                        Layer = targetLayer,
-                        Rotation = rotationRadians
-                    };
-                    blockId = modelSpace.AppendEntity(br);
-                    tr.AddNewlyCreatedDBObject(br, true);
-
-                    tr.Commit();
-                }
-            }
-            return blockId;
-        }
         [CommandMethod("test", CommandFlags.Session)]
         public void InsertBlockFromDwgTest()
         {
@@ -946,686 +519,216 @@ namespace CoDesignStudy.Cad.PlugIn
             }
         }
 
-
-        public static List<Point3d> SortPointsToClosedLoop(List<Point3d> inputPoints)
-        {
-            if (inputPoints == null || inputPoints.Count == 0)
-                return new List<Point3d>();
-
-            List<Point3d> sorted = new List<Point3d>();
-            HashSet<int> visited = new HashSet<int>();
-
-            Point3d current = inputPoints[0];
-            sorted.Add(current);
-            visited.Add(0);
-
-            while (visited.Count < inputPoints.Count)
-            {
-                double minDist = double.MaxValue;
-                int nearestIndex = -1;
-
-                for (int i = 0; i < inputPoints.Count; i++)
-                {
-                    if (visited.Contains(i)) continue;
-
-                    double dist = current.DistanceTo(inputPoints[i]);
-                    if (dist < minDist)
-                    {
-                        minDist = dist;
-                        nearestIndex = i;
-                    }
-                }
-
-                if (nearestIndex != -1)
-                {
-                    current = inputPoints[nearestIndex];
-                    sorted.Add(current);
-                    visited.Add(nearestIndex);
-                }
-            }
-
-            // 闭合回原点
-            sorted.Add(sorted[0]);
-
-            return sorted;
-        }
-
-        public void DrawClosedPolyline(List<Point3d> lampPoints, string layerName)
-        {
-            var sortedPoints = SortPointsToClosedLoop(lampPoints);
-
-            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-
-            using (DocumentLock docLock = doc.LockDocument())
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                // 创建图层（如果不存在）
-                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                if (!lt.Has(layerName))
-                {
-                    lt.UpgradeOpen();
-                    LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
-                    lt.Add(newLayer);
-                    tr.AddNewlyCreatedDBObject(newLayer, true);
-                }
-
-                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                BlockTableRecord btr = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
-
-                Polyline poly = new Polyline();
-                for (int i = 0; i < sortedPoints.Count; i++)
-                {
-                    poly.AddVertexAt(i, new Point2d(sortedPoints[i].X, sortedPoints[i].Y), 0, 0, 0);
-                }
-
-                poly.Closed = true;  // ✅ 关闭曲线
-
-                poly.Layer = layerName;
-
-                poly.Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 153);
-                poly.ConstantWidth = 35f;
-
-                btr.AppendEntity(poly);
-                tr.AddNewlyCreatedDBObject(poly, true);
-
-                tr.Commit();
-            }
-        }
-        public static List<Point3d> SortPointsNearestPath(List<Point3d> inputPoints)
-        {
-            if (inputPoints == null || inputPoints.Count == 0)
-                return new List<Point3d>();
-
-            List<Point3d> sorted = new List<Point3d>();
-            HashSet<int> visited = new HashSet<int>();
-
-            Point3d current = inputPoints[0];
-            sorted.Add(current);
-            visited.Add(0);
-
-            while (visited.Count < inputPoints.Count)
-            {
-                double minDist = double.MaxValue;
-                int nearestIndex = -1;
-
-                for (int i = 0; i < inputPoints.Count; i++)
-                {
-                    if (visited.Contains(i)) continue;
-
-                    double dist = current.DistanceTo(inputPoints[i]);
-                    if (dist < minDist)
-                    {
-                        minDist = dist;
-                        nearestIndex = i;
-                    }
-                }
-
-                if (nearestIndex != -1)
-                {
-                    current = inputPoints[nearestIndex];
-                    sorted.Add(current);
-                    visited.Add(nearestIndex);
-                }
-            }
-
-            return sorted; // ❌ 不再加 sorted[0]
-        }
-
-        public void DrawOpenPolyline(List<Point3d> lampPoints, string layerName)
-        {
-            var sortedPoints = SortPointsNearestPath(lampPoints);
-
-            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-
-            using (DocumentLock docLock = doc.LockDocument())
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                if (!lt.Has(layerName))
-                {
-                    lt.UpgradeOpen();
-                    LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
-                    lt.Add(newLayer);
-                    tr.AddNewlyCreatedDBObject(newLayer, true);
-                }
-
-                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                BlockTableRecord btr = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
-
-                Polyline poly = new Polyline();
-                for (int i = 0; i < sortedPoints.Count; i++)
-                {
-                    poly.AddVertexAt(i, new Point2d(sortedPoints[i].X, sortedPoints[i].Y), 0, 0, 0);
-                }
-
-                // ❌ 不闭合 poly.Closed = true;
-                poly.Layer = layerName;
-                poly.Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 153);
-                poly.ConstantWidth = 35f;
-
-                btr.AppendEntity(poly);
-                tr.AddNewlyCreatedDBObject(poly, true);
-
-                tr.Commit();
-            }
-        }
-
-        public void DrawRectanglePolyline(List<int[]> rectPoints, string layerName = "Rect")
-        {
-            if (rectPoints == null || rectPoints.Count != 4)
-                throw new ArgumentException("必须提供四个矩形角点。");
-
-            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-
-            using (DocumentLock docLock = doc.LockDocument())
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                // 确保图层存在
-                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                if (!lt.Has(layerName))
-                {
-                    lt.UpgradeOpen();
-                    LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
-                    lt.Add(newLayer);
-                    tr.AddNewlyCreatedDBObject(newLayer, true);
-                }
-
-                // 获取模型空间
-                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
-
-                // 创建闭合多段线
-                Polyline poly = new Polyline();
-                for (int i = 0; i < 4; i++)
-                {
-                    int[] pt = rectPoints[i];
-                    poly.AddVertexAt(i, new Point2d(pt[0], pt[1]), 0, 0, 0);
-                }
-                poly.Closed = true;
-                poly.Layer = layerName;
-                poly.Color = Autodesk.AutoCAD.Colors.Color.FromRgb(0, 255, 0); // 可自定义颜色
-                poly.ConstantWidth = 30f;
-
-                modelSpace.AppendEntity(poly);
-                tr.AddNewlyCreatedDBObject(poly, true);
-                tr.Commit();
-            }
-        }
-        public void ExportStatisticsToExcel(List<(string Type, int Count, string Info)> stats, string filePath)
-        {
-            // 创建工作簿
-            IWorkbook workbook = new XSSFWorkbook(); // .xlsx 格式
-            ISheet sheet = workbook.CreateSheet("元件统计");
-
-            // 创建表头
-            IRow headerRow = sheet.CreateRow(0);
-            headerRow.CreateCell(0).SetCellValue("元件类型");
-            headerRow.CreateCell(1).SetCellValue("个数");
-            headerRow.CreateCell(2).SetCellValue("元件信息");
-
-            // 填充数据
-            for (int i = 0; i < stats.Count; i++)
-            {
-                var item = stats[i];
-                IRow row = sheet.CreateRow(i + 1);
-                row.CreateCell(0).SetCellValue(item.Type);
-                row.CreateCell(1).SetCellValue(item.Count);
-                row.CreateCell(2).SetCellValue(item.Info);
-            }
-
-            // 自动列宽（可选）
-            for (int i = 0; i < 3; i++)
-            {
-                sheet.AutoSizeColumn(i);
-            }
-
-            // 保存到文件
-            using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write))
-            {
-                workbook.Write(fs);
-            }
-        }
-
-        public void DrawLineBetweenPoints(Point3d pt1, Point3d pt2, string layerName)
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-
-            using (DocumentLock docLock = doc.LockDocument())
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                // 确保图层存在
-                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                if (!lt.Has(layerName))
-                {
-                    lt.UpgradeOpen();
-                    LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
-                    lt.Add(newLayer);
-                    tr.AddNewlyCreatedDBObject(newLayer, true);
-                }
-
-                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
-
-                // 创建直线
-                Line line = new Line(pt1, pt2)
-                {
-                    Layer = layerName,
-                    Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 204), // 粉红色
-                    LineWeight = LineWeight.LineWeight211 // 0.50mm线宽
-                };
-
-                modelSpace.AppendEntity(line);
-                tr.AddNewlyCreatedDBObject(line, true);
-
-                tr.Commit();
-            }
-        }
-        public (ObjectId, int) DrawPolyLineBetweenPoints(Point3d pt1, Point3d pt2, string layerName, double lineWidth, Autodesk.AutoCAD.Colors.Color color)
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            int polylineLength = 0;
-            ObjectId polyId = ObjectId.Null;
-
-            using (DocumentLock docLock = doc.LockDocument())
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                // 确保图层存在
-                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                if (!lt.Has(layerName))
-                {
-                    lt.UpgradeOpen();
-                    LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
-                    lt.Add(newLayer);
-                    tr.AddNewlyCreatedDBObject(newLayer, true);
-                }
-
-                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
-
-                // 创建多段线
-                Polyline poly = new Polyline();
-                poly.AddVertexAt(0, new Point2d(pt1.X, pt1.Y), 0, (float)lineWidth, (float)lineWidth); // 线宽35f
-                poly.AddVertexAt(1, new Point2d(pt2.X, pt2.Y), 0, (float)lineWidth, (float)lineWidth); // 线宽35f
-                poly.Layer = layerName;
-                poly.Color = color;
-                poly.ConstantWidth = (float)lineWidth;
-
-                polyId = modelSpace.AppendEntity(poly);
-                tr.AddNewlyCreatedDBObject(poly, true);
-                // 获取多段线长度
-                polylineLength = (int)poly.Length;
-                tr.Commit();
-            }
-            return (polyId, polylineLength);
-        }
-        [CommandMethod("MM", CommandFlags.Session)]
-        public void TestMarkdig()
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Editor ed = doc.Editor;
-            Database db = doc.Database;
-            var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
-            var result = Markdown.ToHtml("| 灯具类型 | 个数 | 瓦数 | \r\n|---------|-----|-----|\r\n | 吸顶灯 | 2 | 20W | | 防爆灯 | 3 | 50W | | 荧光灯 | 5 | 60W |", pipeline);
-            ed.WriteMessage($"{result}");   // prints: <p>This is a text with some <em>emphasis</em></p>
-        }
-        /// <summary>
-        /// 在图纸中插入灯具信息文本，格式为：
-        /// 上：功率（如 "100W"）
-        /// 下：安装高度（如 "4.5"）
-        /// 左：灯具数量（如 "4"）
-        /// </summary>
-        /// <param name="basePosition">文本中心点（用于功率位置）</param>
-        /// <param name="fixtureCount">灯具数量</param>
-        /// <param name="powerW">功率（单位 W）</param>
-        /// <param name="mountingHeight">安装高度（单位 m）</param>
-        /// <param name="textHeight">文字高度（默认 300）</param>
-        /// <param name="layerName">图层名称（可选）</param>
-        //[CommandMethod("PP", CommandFlags.Session)]
-        public void InsertLightingInfo(Point3d basePosition, int fixtureCount, int powerW, int mountingHeight, double textHeight = 300, string layerName = "PUB_TEXT")
-        {
-            //Point3d basePosition = new Point3d(34640, 55259, 0);
-            //int fixtureCount = 4;
-            //int powerW = 100;
-            //double mountingHeight = 4.5;
-            //int textHeight = 300;
-            //string layerName = "PUB_TEXT";
-            // 插入中间的功率文本（如 "100W"）
-            ObjectId id1 = InsertTextAt($"{powerW}W", basePosition, layerName, textHeight);
-            InsertTracker.AddEntity(id1);
-
-            // 插入下方的安装高度文本（如 "4.5"）
-            var below = new Point3d(basePosition.X, basePosition.Y - textHeight * 1.4, basePosition.Z);
-            ObjectId id2 = InsertTextAt($"{mountingHeight:0.##}", below, layerName, textHeight);
-            InsertTracker.AddEntity(id2);
-
-            // 插入左侧的灯具数量文本（如 "4"）
-            var left = new Point3d(basePosition.X - textHeight * 1.4, basePosition.Y - textHeight * 0.8, basePosition.Z);
-            ObjectId id3 = InsertTextAt($"{fixtureCount}", left, layerName, textHeight);
-            InsertTracker.AddEntity(id3);
-
-            // 计算直线起止点（在瓦数和高度之间，略微留白）
-            double halfLineLength = textHeight * 2.0;
-            var lineY = basePosition.Y - 85; // 在两者中间
-            Point3d lineStart = new Point3d(basePosition.X - halfLineLength + 500, lineY, basePosition.Z);
-            Point3d lineEnd = new Point3d(basePosition.X + halfLineLength +500, lineY, basePosition.Z);
-
-            // 绘制黄色横线
-            ObjectId id4 = DrawYellowLine(lineStart, lineEnd, layerName);
-            InsertTracker.AddEntity(id4);
-        }
-        /// <summary>
-        /// 在指定坐标插入单行文本（DBText）
-        /// </summary>
-        /// <param name="text">要插入的文本内容</param>
-        /// <param name="position">插入点坐标</param>
-        /// <param name="layerName">可选，插入到的图层，默认为当前图层</param>
-        public ObjectId InsertTextAt(string text, Point3d position, string layerName = null, double textHeight = 300)
-        {
-            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            ObjectId textID;
-
-            using (DocumentLock docLock = doc.LockDocument())
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
-
-                MText mtext = new MText
-                {
-                    Contents = text,
-                    Location = position,
-                    TextHeight = textHeight,
-                    Width = 0, // 0 表示不自动换行，可设置为具体值以控制列宽
-                    Attachment = AttachmentPoint.BottomLeft, // 左下角对齐
-                    Layer = layerName,
-                    Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 2)
-                };
-
-                //// 创建图层（如果不存在）
-                //if (!string.IsNullOrEmpty(layerName))
-                //{
-                //    LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                //    if (!lt.Has(layerName))
-                //    {
-                //        lt.UpgradeOpen();
-                //        LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
-                //        lt.Add(newLayer);
-                //        tr.AddNewlyCreatedDBObject(newLayer, true);
-                //    }
-                //    dbText.Layer = layerName;
-                //}
-
-                textID = modelSpace.AppendEntity(mtext);
-                tr.AddNewlyCreatedDBObject(mtext, true);
-
-                tr.Commit();
-            }
-            return textID;
-        }
-        public ObjectId DrawYellowLine(Point3d start, Point3d end, string layerName)
-        {
-            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
-            Database db = doc.Database;
-            ObjectId yellowlineID;
-
-            using (DocumentLock docLock = doc.LockDocument())
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                // 确保图层存在
-                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-                if (!lt.Has(layerName))
-                {
-                    lt.UpgradeOpen();
-                    LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
-                    lt.Add(newLayer);
-                    tr.AddNewlyCreatedDBObject(newLayer, true);
-                }
-
-                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
-
-                Line line = new Line(start, end)
-                {
-                    Layer = layerName,
-                    Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 2) // 2 = 黄色
-                };
-
-                yellowlineID = modelSpace.AppendEntity(line);
-                tr.AddNewlyCreatedDBObject(line, true);
-
-                tr.Commit();
-            }
-            return yellowlineID;
-        }
-        public void DrawComponentTable6ColsWithBlocks(List<(string Type, double Count, string Info)> statsList)
-        {
-            double rowHeight = 800;
-            short colorIndex = 7;
-            LineWeight lineWeight = LineWeight.LineWeight200;
-            Point3d insertPoint = new Point3d(3599, 17119, 0);
-            var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
-            var db = doc.Database;
-
-            using (DocumentLock docLock = doc.LockDocument())
-            using (var tr = db.TransactionManager.StartTransaction())
-            {
-                var btr = (BlockTableRecord)tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite);
-
-                int rowCount = statsList.Count;
-                int totalRowCount = rowCount + 2;
-                int colCount = 6;
-
-                // 指定列宽
-                double[] colWidths = { 900, 4000, 4000, 900, 1200, 1500 };
-                string[] headerTitles = { "编号", "名称", "规范", "单位", "数量", "图例" };
-
-                // 计算每列起始X坐标
-                double[] colX = new double[colCount + 1];
-                colX[0] = insertPoint.X;
-                for (int i = 1; i <= colCount; i++)
-                {
-                    colX[i] = colX[i - 1] + colWidths[i - 1];
-                }
-
-                double tableHeight = totalRowCount * rowHeight;
-
-                // 画水平线
-                for (int i = 0; i <= totalRowCount; i++)
-                {
-                    double y = insertPoint.Y - i * rowHeight;
-                    var start = new Point3d(colX[0], y, 0);
-                    var end = new Point3d(colX[colCount], y, 0);
-                    var line = new Line(start, end)
-                    {
-                        Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(ColorMethod.ByAci, colorIndex),
-                        LineWeight = lineWeight
-                    };
-                    btr.AppendEntity(line);
-                    tr.AddNewlyCreatedDBObject(line, true);
-                }
-
-                // 画垂直线
-                for (int j = 0; j <= colCount; j++)
-                {
-                    Point3d start;
-                    if (j == 0 || j == colCount)
-                    {
-                        start = new Point3d(colX[j], insertPoint.Y, 0);
-                    }
-                    else
-                    {
-                        start = new Point3d(colX[j], insertPoint.Y - rowHeight, 0);
-                    }
-                    var end = new Point3d(colX[j], insertPoint.Y - tableHeight, 0);
-                    var line = new Line(start, end)
-                    {
-                        Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(ColorMethod.ByAci, colorIndex),
-                        LineWeight = lineWeight
-                    };
-                    btr.AppendEntity(line);
-                    tr.AddNewlyCreatedDBObject(line, true);
-                }
-                // 插入标题：第 0 行，居中插入
-                {
-                    double titleCenterX = (colX[colCount] + colX[0]) / 2;
-                    double titleY = insertPoint.Y - rowHeight * 0.6;
-
-                    var mtext = new MText
-                    {
-                        Contents = "设备材料清单",
-                        TextHeight = rowHeight * 0.5,
-                        Location = new Point3d(titleCenterX, titleY, 0),
-                        Attachment = AttachmentPoint.MiddleCenter,
-                        Width = colX[colCount] - colX[0]
-                    };
-
-                    btr.AppendEntity(mtext);
-                    tr.AddNewlyCreatedDBObject(mtext, true);
-                }
-                // 插入表头行（第1行）
-                for (int j = 0; j < colCount; j++)
-                {
-                    double x = colX[j] + 100;
-                    double y = insertPoint.Y - rowHeight * 1.6;
-
-                    var text = new DBText
-                    {
-                        TextString = headerTitles[j],
-                        Position = new Point3d(x, y, 0),
-                        Height = rowHeight * 0.35,
-                        Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(ColorMethod.ByAci, 7)
-                    };
-
-                    btr.AppendEntity(text);
-                    tr.AddNewlyCreatedDBObject(text, true);
-                }
-
-                // 插入文本：列顺序 = 行号, type, info, "只", count, 空
-                for (int i = 0; i < rowCount; i++)
-                {
-                    var (type, count, info) = statsList[i];
-                    string unit = type.EndsWith("线路") ? "米" : "只";
-                    string[] values = {
-                                        (i+1).ToString(),    // 第1列：行号
-                                        type,            // 第2列：元件类型
-                                        info,            // 第3列：元件信息
-                                        unit,            // 第4列：单位
-                                        count.ToString(),// 第5列：数量
-                                        ""               // 图例（插入块）
-                                    };
-
-                    for (int j = 0; j < colCount; j++)
-                    {
-                        // 块插入逻辑（第六列）
-                        if (j == 5)
-                        {
-                            double blockX = colX[j] + colWidths[j] / 2;
-                            double blockY = insertPoint.Y - (i+2) * rowHeight - rowHeight / 2;
-                            var blockPoint = new Point3d(blockX, blockY, 0);
-                            InsertBlockFromDwg(blockPoint, "PUB_TEXT", type, 0);
-                            continue;
-                        }
-                        double x = colX[j] + 100; // 边距内缩
-                        double y = insertPoint.Y - (i+2) * rowHeight - rowHeight * 0.6;
-
-                        var mtext = new MText
-                        {
-                            Contents = values[j],
-                            Location = new Point3d(x, y, 0),
-                            TextHeight = rowHeight * 0.35,
-                            Width = colWidths[j] - 200, // 控制列内宽度，避免溢出
-                            Attachment = AttachmentPoint.MiddleLeft, // 文字对齐方式
-                            Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(ColorMethod.ByAci, 7)
-                        };
-                        btr.AppendEntity(mtext);
-                        tr.AddNewlyCreatedDBObject(mtext, true);
-                    }
-                }
-
-                tr.Commit();
-            }
-        }
-        public static List<int[]> ShrinkRectangle(List<int[]> rectPoints, int offsetX, int offsetY)
-        {
-            if (rectPoints == null || rectPoints.Count != 4)
-                throw new ArgumentException("矩形必须有4个点");
-
-            // 将每个点包装成带索引的结构
-            var sorted = rectPoints
-                .Select(pt => new { X = pt[0], Y = pt[1], Point = pt })
-                .ToList();
-
-            // 找出四个角
-            var leftBottom = sorted.OrderBy(p => p.X).ThenBy(p => p.Y).First().Point;
-            var leftTop = sorted.OrderBy(p => p.X).ThenByDescending(p => p.Y).First().Point;
-            var rightTop = sorted.OrderByDescending(p => p.X).ThenByDescending(p => p.Y).First().Point;
-            var rightBottom = sorted.OrderByDescending(p => p.X).ThenBy(p => p.Y).First().Point;
-
-            // 缩小每个角点
-            var newPoints = new List<int[]>
-            {
-                new int[] { leftBottom[0] + offsetX, leftBottom[1] + offsetY },       // 左下
-                new int[] { leftTop[0] + offsetX, leftTop[1] - offsetY * 2 },             // 左上
-                new int[] { rightTop[0] - offsetX * 2, rightTop[1] - offsetY * 2 },           // 右上
-                new int[] { rightBottom[0] - offsetX * 2, rightBottom[1] + offsetY }      // 右下
-            };
-
-            return newPoints;
-        }
-        public void MergeLightingFromModelReply(string modelReplyJson)
-        {
-            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-            Editor ed = doc.Editor;
-            try
-            {
-                // 反序列化模型回复
-                var lightingDesignResponse = JsonConvert.DeserializeObject<LightingDesignResponse>(modelReplyJson);
-
-                // 构造路径，读取房间分析结果 JSON 文件
-                string filePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "cad_rect_result.json");
-                if (File.Exists(filePath))
-                {
-                    string analysisJson = File.ReadAllText(filePath);
-                    // 直接反序列化为 RoomInfo（结构相同）
-                    var roomInfo = JsonConvert.DeserializeObject<LightingDesignResponse.RoomInfo>(analysisJson);
-                    lightingDesignResponse.room_info = roomInfo;
-                    string finalJson = JsonConvert.SerializeObject(lightingDesignResponse, Formatting.Indented);
-
-                    // 自动生成递增的文件名 final_result_1.json, final_result_2.json, ...
-                    string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-                    int index = 1;
-                    string savePath;
-
-                    do
-                    {
-                        savePath = Path.Combine(desktopPath, $"final_result_{index}.json");
-                        index++;
-                    }
-                    while (File.Exists(savePath));
-
-                    File.WriteAllText(savePath, finalJson, System.Text.Encoding.UTF8);
-                    ed.WriteMessage($"\n合并结果已导出到: {savePath}");
-                }
-                else
-                {
-                    ed.WriteMessage($"\n找不到分析结果文件: {filePath}");
-                }
-
-                // TODO: 在此处使用 lightingDesignResponse，比如生成CAD布图等后续逻辑
-
-                ed.WriteMessage("\n模型和分析数据已成功合并。");
-            }
-            catch (System.Exception ex)
-            {
-                ed.WriteMessage($"\n处理过程中发生错误: {ex.Message}");
-            }
-        }
+        //public static List<Point3d> SortPointsToClosedLoop(List<Point3d> inputPoints)
+        //{
+        //    if (inputPoints == null || inputPoints.Count == 0)
+        //        return new List<Point3d>();
+
+        //    List<Point3d> sorted = new List<Point3d>();
+        //    HashSet<int> visited = new HashSet<int>();
+
+        //    Point3d current = inputPoints[0];
+        //    sorted.Add(current);
+        //    visited.Add(0);
+
+        //    while (visited.Count < inputPoints.Count)
+        //    {
+        //        double minDist = double.MaxValue;
+        //        int nearestIndex = -1;
+
+        //        for (int i = 0; i < inputPoints.Count; i++)
+        //        {
+        //            if (visited.Contains(i)) continue;
+
+        //            double dist = current.DistanceTo(inputPoints[i]);
+        //            if (dist < minDist)
+        //            {
+        //                minDist = dist;
+        //                nearestIndex = i;
+        //            }
+        //        }
+
+        //        if (nearestIndex != -1)
+        //        {
+        //            current = inputPoints[nearestIndex];
+        //            sorted.Add(current);
+        //            visited.Add(nearestIndex);
+        //        }
+        //    }
+
+        //    // 闭合回原点
+        //    sorted.Add(sorted[0]);
+
+        //    return sorted;
+        //}
+
+        //public void DrawClosedPolyline(List<Point3d> lampPoints, string layerName)
+        //{
+        //    var sortedPoints = SortPointsToClosedLoop(lampPoints);
+
+        //    Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+        //    Database db = doc.Database;
+
+        //    using (DocumentLock docLock = doc.LockDocument())
+        //    using (Transaction tr = db.TransactionManager.StartTransaction())
+        //    {
+        //        // 创建图层（如果不存在）
+        //        LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        //        if (!lt.Has(layerName))
+        //        {
+        //            lt.UpgradeOpen();
+        //            LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
+        //            lt.Add(newLayer);
+        //            tr.AddNewlyCreatedDBObject(newLayer, true);
+        //        }
+
+        //        BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+        //        BlockTableRecord btr = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+        //        Polyline poly = new Polyline();
+        //        for (int i = 0; i < sortedPoints.Count; i++)
+        //        {
+        //            poly.AddVertexAt(i, new Point2d(sortedPoints[i].X, sortedPoints[i].Y), 0, 0, 0);
+        //        }
+
+        //        poly.Closed = true;  // ✅ 关闭曲线
+
+        //        poly.Layer = layerName;
+
+        //        poly.Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 153);
+        //        poly.ConstantWidth = 35f;
+
+        //        btr.AppendEntity(poly);
+        //        tr.AddNewlyCreatedDBObject(poly, true);
+
+        //        tr.Commit();
+        //    }
+        //}
+        ///// <summary>
+        ///// 按最近邻路径对点集进行排序，返回一条经过所有点的“最短路径近似”序列（不闭合回起点）。
+        ///// 用于将一组无序的点，按“最近点优先”方式串联成一条连续路径，常用于多段线绘制等场景。
+        ///// </summary>
+        ///// <param name="inputPoints">待排序的点集</param>
+        //public static List<Point3d> SortPointsNearestPath(List<Point3d> inputPoints)
+        //{
+        //    if (inputPoints == null || inputPoints.Count == 0)
+        //        return new List<Point3d>();
+
+        //    List<Point3d> sorted = new List<Point3d>();
+        //    HashSet<int> visited = new HashSet<int>();
+
+        //    Point3d current = inputPoints[0];
+        //    sorted.Add(current);
+        //    visited.Add(0);
+
+        //    while (visited.Count < inputPoints.Count)
+        //    {
+        //        double minDist = double.MaxValue;
+        //        int nearestIndex = -1;
+
+        //        for (int i = 0; i < inputPoints.Count; i++)
+        //        {
+        //            if (visited.Contains(i)) continue;
+
+        //            double dist = current.DistanceTo(inputPoints[i]);
+        //            if (dist < minDist)
+        //            {
+        //                minDist = dist;
+        //                nearestIndex = i;
+        //            }
+        //        }
+
+        //        if (nearestIndex != -1)
+        //        {
+        //            current = inputPoints[nearestIndex];
+        //            sorted.Add(current);
+        //            visited.Add(nearestIndex);
+        //        }
+        //    }
+
+        //    return sorted; // ❌ 不再加 sorted[0]
+        //}
+        ///// <summary>
+        ///// 绘制不闭合的多段线
+        ///// </summary>
+        //public void DrawOpenPolyline(List<Point3d> lampPoints, string layerName)
+        //{
+        //    var sortedPoints = SortPointsNearestPath(lampPoints);
+
+        //    Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+        //    Database db = doc.Database;
+
+        //    using (DocumentLock docLock = doc.LockDocument())
+        //    using (Transaction tr = db.TransactionManager.StartTransaction())
+        //    {
+        //        LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        //        if (!lt.Has(layerName))
+        //        {
+        //            lt.UpgradeOpen();
+        //            LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
+        //            lt.Add(newLayer);
+        //            tr.AddNewlyCreatedDBObject(newLayer, true);
+        //        }
+
+        //        BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+        //        BlockTableRecord btr = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+        //        Polyline poly = new Polyline();
+        //        for (int i = 0; i < sortedPoints.Count; i++)
+        //        {
+        //            poly.AddVertexAt(i, new Point2d(sortedPoints[i].X, sortedPoints[i].Y), 0, 0, 0);
+        //        }
+
+        //        // ❌ 不闭合 poly.Closed = true;
+        //        poly.Layer = layerName;
+        //        poly.Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 153);
+        //        poly.ConstantWidth = 35f;
+
+        //        btr.AppendEntity(poly);
+        //        tr.AddNewlyCreatedDBObject(poly, true);
+
+        //        tr.Commit();
+        //    }
+        //}
+        
+        ///// <summary>
+        ///// 两点之间绘制线段
+        ///// </summary>
+        //public void DrawLineBetweenPoints(Point3d pt1, Point3d pt2, string layerName)
+        //{
+        //    Document doc = CADApplication.DocumentManager.MdiActiveDocument;
+        //    Database db = doc.Database;
+
+        //    using (DocumentLock docLock = doc.LockDocument())
+        //    using (Transaction tr = db.TransactionManager.StartTransaction())
+        //    {
+        //        // 确保图层存在
+        //        LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        //        if (!lt.Has(layerName))
+        //        {
+        //            lt.UpgradeOpen();
+        //            LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
+        //            lt.Add(newLayer);
+        //            tr.AddNewlyCreatedDBObject(newLayer, true);
+        //        }
+
+        //        BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+        //        BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+        //        // 创建直线
+        //        Line line = new Line(pt1, pt2)
+        //        {
+        //            Layer = layerName,
+        //            Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 204), // 粉红色
+        //            LineWeight = LineWeight.LineWeight211 // 0.50mm线宽
+        //        };
+
+        //        modelSpace.AppendEntity(line);
+        //        tr.AddNewlyCreatedDBObject(line, true);
+
+        //        tr.Commit();
+        //    }
+        //}
         #endregion
     }
     }
