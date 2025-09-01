@@ -1,8 +1,4 @@
-﻿using Autodesk.AutoCAD.ApplicationServices;
-using Autodesk.AutoCAD.DatabaseServices;
-using Autodesk.AutoCAD.EditorInput;
-using Autodesk.AutoCAD.Geometry;
-using DeepSeek.Sdk;
+﻿using DeepSeek.Sdk;
 using Markdig;  // 支持Markdown语法
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms; 
@@ -268,7 +264,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 var statsList = CadDrawingHelper.componentStats
                         .Select(kv => (Type: kv.Key, Count: kv.Value.Count, Info: kv.Value.Info))
                         .ToList();
-                Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.SendStringToExecute("EE ", true, false, false);
+                CadDrawingHelper.DrawComponentTable6ColsWithBlocks(statsList);
                 await Task.Delay(2000);
                 await AppendMessageAsync("AI", "已为您生成材料清单");
                 return;

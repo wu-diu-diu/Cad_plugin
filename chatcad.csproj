@@ -77,11 +77,11 @@
       <Private>False</Private>
     </Reference>
     <Reference Include="Autodesk.AutoCAD.Interop">
-      <HintPath>..\..\Autodesk\AutoCAD_2018\AutoCAD 2018\Autodesk.AutoCAD.Interop.dll</HintPath>
+      <HintPath>..\..\APPS\autocad2018\AutoCAD 2018\Autodesk.AutoCAD.Interop.dll</HintPath>
       <EmbedInteropTypes>True</EmbedInteropTypes>
     </Reference>
     <Reference Include="Autodesk.AutoCAD.Interop.Common">
-      <HintPath>..\..\Autodesk\AutoCAD_2018\AutoCAD 2018\Autodesk.AutoCAD.Interop.Common.dll</HintPath>
+      <HintPath>..\..\APPS\autocad2018\AutoCAD 2018\Autodesk.AutoCAD.Interop.Common.dll</HintPath>
       <EmbedInteropTypes>True</EmbedInteropTypes>
     </Reference>
     <Reference Include="BouncyCastle.Cryptography, Version=2.0.0.0, Culture=neutral, PublicKeyToken=072edcf4a5328938, processorArchitecture=MSIL">
@@ -174,9 +174,6 @@
     <Reference Include="NPOI.OpenXmlFormats, Version=2.7.4.0, Culture=neutral, PublicKeyToken=0df73ec7942b34e1, processorArchitecture=MSIL">
       <HintPath>packages\NPOI.2.7.4\lib\netstandard2.0\NPOI.OpenXmlFormats.dll</HintPath>
     </Reference>
-    <Reference Include="OpenAI, Version=2.3.0.0, Culture=neutral, PublicKeyToken=b4187f3e65366280, processorArchitecture=MSIL">
-      <HintPath>packages\OpenAI.2.3.0\lib\netstandard2.0\OpenAI.dll</HintPath>
-    </Reference>
     <Reference Include="PresentationCore" />
     <Reference Include="RBush, Version=4.0.0.0, Culture=neutral, PublicKeyToken=c77e27b81f4d0187, processorArchitecture=MSIL">
       <HintPath>packages\RBush.Signed.4.0.0\lib\netstandard2.0\RBush.dll</HintPath>
@@ -256,7 +253,6 @@
     </Compile>
     <Compile Include="Command.cs" />
     <Compile Include="InsertTracker.cs" />
-    <Compile Include="Model.cs" />
     <Compile Include="CadDrawingHelper.cs" />
     <Compile Include="Vertex.cs" />
     <Compile Include="Prompt.cs" />

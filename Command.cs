@@ -4,9 +4,15 @@ using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.Runtime;
 using System;
+using System.ClientModel;
 using System.Collections.Generic;
+using System.Configuration;
 using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using CADApplication = Autodesk.AutoCAD.ApplicationServices.Application;
 
@@ -61,6 +67,60 @@ namespace CoDesignStudy.Cad.PlugIn
             catch (System.Exception ex)
             {
                 MessageBox.Show("测试", ex.Message);
+            }
+        }
+        [CommandMethod("ALIYUN_QWEN_CHAT", CommandFlags.Session)]
+        public async void AliyunQwenChat()
+        {
+            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            Editor ed = doc.Editor;
+
+            string apiKey = Environment.GetEnvironmentVariable("DASHSCOPE_API_KEY");
+            if (string.IsNullOrEmpty(apiKey))
+            {
+                ed.WriteMessage("\nAPI Key 未设置。请确保环境变量 'DASHSCOPE_API_KEY' 已设置。");
+                return;
+            }
+
+            string url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
+            string jsonContent = @"{
+                ""model"": ""qwen-plus"",
+                ""messages"": [
+                    {
+                        ""role"": ""system"",
+                        ""content"": ""You are a helpful assistant.""
+                    },
+                    {
+                        ""role"": ""user"", 
+                        ""content"": ""你是谁？""
+                    }
+                ]
+            }";
+
+            string result = await SendPostRequestAsync(url, jsonContent, apiKey);
+            ed.WriteMessage($"\n模型输出: {result}");
+        }
+
+        private static readonly HttpClient httpClient = new HttpClient();
+
+        private static async Task<string> SendPostRequestAsync(string url, string jsonContent, string apiKey)
+        {
+            using (var content = new StringContent(jsonContent, Encoding.UTF8, "application/json"))
+            {
+                httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+                httpClient.DefaultRequestHeaders.Accept.Clear();
+                httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+                HttpResponseMessage response = await httpClient.PostAsync(url, content);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    return await response.Content.ReadAsStringAsync();
+                }
+                else
+                {
+                    return $"请求失败: {response.StatusCode}";
+                }
             }
         }
 
@@ -518,217 +578,6 @@ namespace CoDesignStudy.Cad.PlugIn
                 }
             }
         }
-
-        //public static List<Point3d> SortPointsToClosedLoop(List<Point3d> inputPoints)
-        //{
-        //    if (inputPoints == null || inputPoints.Count == 0)
-        //        return new List<Point3d>();
-
-        //    List<Point3d> sorted = new List<Point3d>();
-        //    HashSet<int> visited = new HashSet<int>();
-
-        //    Point3d current = inputPoints[0];
-        //    sorted.Add(current);
-        //    visited.Add(0);
-
-        //    while (visited.Count < inputPoints.Count)
-        //    {
-        //        double minDist = double.MaxValue;
-        //        int nearestIndex = -1;
-
-        //        for (int i = 0; i < inputPoints.Count; i++)
-        //        {
-        //            if (visited.Contains(i)) continue;
-
-        //            double dist = current.DistanceTo(inputPoints[i]);
-        //            if (dist < minDist)
-        //            {
-        //                minDist = dist;
-        //                nearestIndex = i;
-        //            }
-        //        }
-
-        //        if (nearestIndex != -1)
-        //        {
-        //            current = inputPoints[nearestIndex];
-        //            sorted.Add(current);
-        //            visited.Add(nearestIndex);
-        //        }
-        //    }
-
-        //    // 闭合回原点
-        //    sorted.Add(sorted[0]);
-
-        //    return sorted;
-        //}
-
-        //public void DrawClosedPolyline(List<Point3d> lampPoints, string layerName)
-        //{
-        //    var sortedPoints = SortPointsToClosedLoop(lampPoints);
-
-        //    Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
-        //    Database db = doc.Database;
-
-        //    using (DocumentLock docLock = doc.LockDocument())
-        //    using (Transaction tr = db.TransactionManager.StartTransaction())
-        //    {
-        //        // 创建图层（如果不存在）
-        //        LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-        //        if (!lt.Has(layerName))
-        //        {
-        //            lt.UpgradeOpen();
-        //            LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
-        //            lt.Add(newLayer);
-        //            tr.AddNewlyCreatedDBObject(newLayer, true);
-        //        }
-
-        //        BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-        //        BlockTableRecord btr = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
-
-        //        Polyline poly = new Polyline();
-        //        for (int i = 0; i < sortedPoints.Count; i++)
-        //        {
-        //            poly.AddVertexAt(i, new Point2d(sortedPoints[i].X, sortedPoints[i].Y), 0, 0, 0);
-        //        }
-
-        //        poly.Closed = true;  // ✅ 关闭曲线
-
-        //        poly.Layer = layerName;
-
-        //        poly.Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 153);
-        //        poly.ConstantWidth = 35f;
-
-        //        btr.AppendEntity(poly);
-        //        tr.AddNewlyCreatedDBObject(poly, true);
-
-        //        tr.Commit();
-        //    }
-        //}
-        ///// <summary>
-        ///// 按最近邻路径对点集进行排序，返回一条经过所有点的“最短路径近似”序列（不闭合回起点）。
-        ///// 用于将一组无序的点，按“最近点优先”方式串联成一条连续路径，常用于多段线绘制等场景。
-        ///// </summary>
-        ///// <param name="inputPoints">待排序的点集</param>
-        //public static List<Point3d> SortPointsNearestPath(List<Point3d> inputPoints)
-        //{
-        //    if (inputPoints == null || inputPoints.Count == 0)
-        //        return new List<Point3d>();
-
-        //    List<Point3d> sorted = new List<Point3d>();
-        //    HashSet<int> visited = new HashSet<int>();
-
-        //    Point3d current = inputPoints[0];
-        //    sorted.Add(current);
-        //    visited.Add(0);
-
-        //    while (visited.Count < inputPoints.Count)
-        //    {
-        //        double minDist = double.MaxValue;
-        //        int nearestIndex = -1;
-
-        //        for (int i = 0; i < inputPoints.Count; i++)
-        //        {
-        //            if (visited.Contains(i)) continue;
-
-        //            double dist = current.DistanceTo(inputPoints[i]);
-        //            if (dist < minDist)
-        //            {
-        //                minDist = dist;
-        //                nearestIndex = i;
-        //            }
-        //        }
-
-        //        if (nearestIndex != -1)
-        //        {
-        //            current = inputPoints[nearestIndex];
-        //            sorted.Add(current);
-        //            visited.Add(nearestIndex);
-        //        }
-        //    }
-
-        //    return sorted; // ❌ 不再加 sorted[0]
-        //}
-        ///// <summary>
-        ///// 绘制不闭合的多段线
-        ///// </summary>
-        //public void DrawOpenPolyline(List<Point3d> lampPoints, string layerName)
-        //{
-        //    var sortedPoints = SortPointsNearestPath(lampPoints);
-
-        //    Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
-        //    Database db = doc.Database;
-
-        //    using (DocumentLock docLock = doc.LockDocument())
-        //    using (Transaction tr = db.TransactionManager.StartTransaction())
-        //    {
-        //        LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-        //        if (!lt.Has(layerName))
-        //        {
-        //            lt.UpgradeOpen();
-        //            LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
-        //            lt.Add(newLayer);
-        //            tr.AddNewlyCreatedDBObject(newLayer, true);
-        //        }
-
-        //        BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-        //        BlockTableRecord btr = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
-
-        //        Polyline poly = new Polyline();
-        //        for (int i = 0; i < sortedPoints.Count; i++)
-        //        {
-        //            poly.AddVertexAt(i, new Point2d(sortedPoints[i].X, sortedPoints[i].Y), 0, 0, 0);
-        //        }
-
-        //        // ❌ 不闭合 poly.Closed = true;
-        //        poly.Layer = layerName;
-        //        poly.Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 153);
-        //        poly.ConstantWidth = 35f;
-
-        //        btr.AppendEntity(poly);
-        //        tr.AddNewlyCreatedDBObject(poly, true);
-
-        //        tr.Commit();
-        //    }
-        //}
-        
-        ///// <summary>
-        ///// 两点之间绘制线段
-        ///// </summary>
-        //public void DrawLineBetweenPoints(Point3d pt1, Point3d pt2, string layerName)
-        //{
-        //    Document doc = CADApplication.DocumentManager.MdiActiveDocument;
-        //    Database db = doc.Database;
-
-        //    using (DocumentLock docLock = doc.LockDocument())
-        //    using (Transaction tr = db.TransactionManager.StartTransaction())
-        //    {
-        //        // 确保图层存在
-        //        LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-        //        if (!lt.Has(layerName))
-        //        {
-        //            lt.UpgradeOpen();
-        //            LayerTableRecord newLayer = new LayerTableRecord { Name = layerName };
-        //            lt.Add(newLayer);
-        //            tr.AddNewlyCreatedDBObject(newLayer, true);
-        //        }
-
-        //        BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-        //        BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
-
-        //        // 创建直线
-        //        Line line = new Line(pt1, pt2)
-        //        {
-        //            Layer = layerName,
-        //            Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 153, 204), // 粉红色
-        //            LineWeight = LineWeight.LineWeight211 // 0.50mm线宽
-        //        };
-
-        //        modelSpace.AppendEntity(line);
-        //        tr.AddNewlyCreatedDBObject(line, true);
-
-        //        tr.Commit();
-        //    }
-        //}
         #endregion
     }
     }
