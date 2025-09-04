@@ -2,11 +2,13 @@
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
+using Autodesk.AutoCAD.PlottingServices;
 using Autodesk.AutoCAD.Runtime;
 using System;
 using System.ClientModel;
 using System.Collections.Generic;
 using System.Configuration;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -15,6 +17,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using CADApplication = Autodesk.AutoCAD.ApplicationServices.Application;
+
 
 [assembly: ExtensionApplication(typeof(CoDesignStudy.Cad.PlugIn.Command))]
 [assembly: CommandClass(typeof(CoDesignStudy.Cad.PlugIn.Command))]
@@ -578,6 +581,294 @@ namespace CoDesignStudy.Cad.PlugIn
                 }
             }
         }
+
+        [CommandMethod("PLOT_TO_PNG", CommandFlags.Session)]
+        public void PlotToPng()
+        {
+            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+            Editor ed = doc.Editor;
+            string outputDir = @"C:\Users\武丢丢\Documents\cadpdf";
+            string outputFile = Path.Combine(outputDir, "output.png");
+
+            if (!Directory.Exists(outputDir))
+                Directory.CreateDirectory(outputDir);
+
+            using (doc.LockDocument()) // 添加文档锁定
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            using (PlotEngine pe = PlotFactory.CreatePublishEngine())
+            using (PlotProgressDialog ppd = new PlotProgressDialog(false, 1, true))
+            {
+                try
+                {
+                    // 获取布局和创建 PlotSettings
+                    LayoutManager lm = LayoutManager.Current;
+                    ObjectId layoutId = lm.GetLayoutId(lm.CurrentLayout);
+                    Layout layout = (Layout)tr.GetObject(layoutId, OpenMode.ForRead);
+
+                    PlotSettings ps = new PlotSettings(layout.ModelType);
+                    ps.CopyFrom(layout);
+
+                    // 设置打印参数
+                    PlotSettingsValidator psv = PlotSettingsValidator.Current;
+                    psv.SetPlotConfigurationName(ps, "PublishToWeb PNG.pc3", null);
+                    psv.RefreshLists(ps);
+
+                    string customMediaName = "UserDefinedRaster (3840.00 x 2160.00像素)";
+                    var mediaList = psv.GetCanonicalMediaNameList(ps);
+                    if (mediaList.Contains(customMediaName))
+                        psv.SetCanonicalMediaName(ps, customMediaName);
+
+                    psv.SetUseStandardScale(ps, true);
+                    psv.SetStdScaleType(ps, StdScaleType.ScaleToFit);
+                    psv.SetPlotRotation(ps, PlotRotation.Degrees000);
+                    psv.SetPlotType(ps, Autodesk.AutoCAD.DatabaseServices.PlotType.Display);
+
+                    // 创建 PlotInfo 并验证
+                    PlotInfo pi = new PlotInfo { Layout = layoutId, OverrideSettings = ps };
+                    PlotInfoValidator piv = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled };
+                    piv.Validate(pi);
+
+                    // 执行打印
+                    System.IO.Directory.SetCurrentDirectory(outputDir);
+                    ppd.set_PlotMsgString(PlotMessageIndex.DialogTitle, "出图进度");
+                    ppd.OnBeginPlot();
+
+                    pe.BeginPlot(ppd, null);
+                    pe.BeginDocument(pi, doc.Name, null, 1, true, outputFile);
+
+                    PlotPageInfo ppi = new PlotPageInfo();
+                    pe.BeginPage(ppi, pi, true, null);
+                    pe.BeginGenerateGraphics(null);
+                    pe.EndGenerateGraphics(null);
+                    pe.EndPage(null);
+                    pe.EndDocument(null);
+                    pe.EndPlot(null);
+
+                    tr.Commit();
+                    ed.WriteMessage($"\nPNG 图片已输出到: {outputFile}");
+                }
+                catch (System.Exception ex)
+                {
+                    ed.WriteMessage($"\n出图失败: {ex.Message}");
+                    tr.Abort();
+                }
+            }
+        }
+        [CommandMethod("PLOT_WINDOW", CommandFlags.Session)]
+        public void PlotWindowPng()
+        {
+            Document doc = CADApplication.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+            Editor ed = doc.Editor;
+            string outputDir = @"C:\Users\武丢丢\Documents\cadpdf";
+            string outputFile = Path.Combine(outputDir, "output.png");
+            if (!Directory.Exists(outputDir))
+                Directory.CreateDirectory(outputDir);
+
+            // 定义需要打印的图层名称列表
+            List<string> remainedLyaer = new List<string>
+            {
+                "PUB_WALL",
+                "PUB_TEXT",
+                "PUB_HATCH",
+                "WINDOW",
+                "WALL"
+                // 在这里添加你需要打印的图层名称
+            };
+
+            // 1. 切换到布局1
+            LayoutManager lm = LayoutManager.Current;
+            if (lm.CurrentLayout != "布局1")
+            {
+                try
+                {
+                    lm.CurrentLayout = "布局1";
+                    ed.WriteMessage("\n已切换到布局1");
+                }
+                catch (System.Exception ex)
+                {
+                    ed.WriteMessage($"\n切换到布局1失败: {ex.Message}");
+                    return;
+                }
+            }
+
+            // 2. 让用户用鼠标框选一个窗口区域
+            PromptPointResult ppr1 = ed.GetPoint("\n请指定窗口的第一个角点: ");
+            if (ppr1.Status != PromptStatus.OK) return;
+            PromptCornerOptions pco = new PromptCornerOptions("\n请指定对角点: ", ppr1.Value);
+            PromptPointResult ppr2 = ed.GetCorner(pco);
+            if (ppr2.Status != PromptStatus.OK) return;
+            Point3d pt1 = ppr1.Value;
+            Point3d pt2 = ppr2.Value;
+
+            // 3. 计算窗口的四个角点
+            double xmin = Math.Min(pt1.X, pt2.X);
+            double xmax = Math.Max(pt1.X, pt2.X);
+            double ymin = Math.Min(pt1.Y, pt2.Y);
+            double ymax = Math.Max(pt1.Y, pt2.Y);
+            Point3d leftBottom = new Point3d(xmin, ymin, 0);
+            Point3d rightBottom = new Point3d(xmax, ymin, 0);
+            Point3d rightTop = new Point3d(xmax, ymax, 0);
+            Point3d leftTop = new Point3d(xmin, ymax, 0);
+
+            // 4. 打印窗口四个点坐标和原点偏移量
+            ed.WriteMessage($"\n窗口四个角点坐标：");
+            ed.WriteMessage($"\n左下: ({leftBottom.X}, {leftBottom.Y})");
+            ed.WriteMessage($"\n右下: ({rightBottom.X}, {rightBottom.Y})");
+            ed.WriteMessage($"\n右上: ({rightTop.X}, {rightTop.Y})");
+            ed.WriteMessage($"\n左上: ({leftTop.X}, {leftTop.Y})");
+            ed.WriteMessage($"\n窗口范围：xmin={xmin}, xmax={xmax}, ymin={ymin}, ymax={ymax}");
+            ed.WriteMessage($"\n窗口左下角（原点）偏移量：({leftBottom.X}, {leftBottom.Y})");
+
+            // 5. 记录所有图层的原始状态
+
+            Dictionary<string, bool> originalLayerStates = new Dictionary<string, bool>();
+            using (doc.LockDocument())
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                foreach (ObjectId layerId in lt)
+                {
+                    LayerTableRecord ltr = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForWrite);
+                    originalLayerStates[ltr.Name] = ltr.IsOff;
+                    // 只保留指定的图层可见
+                    ltr.IsOff = !remainedLyaer.Contains(ltr.Name);
+                }
+                tr.Commit();
+                ed.WriteMessage($"\n已设置图层可见性，只显示 {remainedLyaer.Count} 个指定图层");
+            }
+
+            try
+            {
+                // 6. 执行出图
+                using (doc.LockDocument())
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                using (PlotEngine pe = PlotFactory.CreatePublishEngine())
+                using (PlotProgressDialog ppd = new PlotProgressDialog(false, 1, true))
+                {
+                    try
+                    {
+                        ObjectId layoutId = lm.GetLayoutId("布局1");
+                        Layout layout = (Layout)tr.GetObject(layoutId, OpenMode.ForRead);
+
+                        PlotSettings ps = new PlotSettings(layout.ModelType);
+                        ps.CopyFrom(layout);
+                        PlotSettingsValidator psv = PlotSettingsValidator.Current;
+                        psv.SetPlotConfigurationName(ps, "PublishToWeb PNG.pc3", null);
+                        psv.RefreshLists(ps);
+
+                        string customMediaName = "UserDefinedRaster (3840.00 x 2160.00像素)";
+                        var mediaList = psv.GetCanonicalMediaNameList(ps);
+                        if (mediaList.Contains(customMediaName))
+                            psv.SetCanonicalMediaName(ps, customMediaName);
+
+                        // 7. 设置窗口区域出图
+                        try
+                        {
+                            // 先设置窗口区域
+                            psv.SetPlotWindowArea(ps, new Extents2d(xmin, ymin, xmax, ymax));
+                            // 再设置为窗口类型
+                            psv.SetPlotType(ps, Autodesk.AutoCAD.DatabaseServices.PlotType.Window);
+                        }
+                        catch (Autodesk.AutoCAD.Runtime.Exception)
+                        {
+                            // 如果窗口类型设置失败，回退到范围类型
+                            ed.WriteMessage("\n窗口类型设置失败，使用范围类型出图");
+                            psv.SetPlotType(ps, Autodesk.AutoCAD.DatabaseServices.PlotType.Extents);
+                        }
+
+                        psv.SetUseStandardScale(ps, true);
+                        psv.SetStdScaleType(ps, StdScaleType.ScaleToFit);
+                        psv.SetPlotRotation(ps, PlotRotation.Degrees000);
+
+                        PlotInfo pi = new PlotInfo { Layout = layoutId, OverrideSettings = ps };
+                        PlotInfoValidator piv = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled };
+                        piv.Validate(pi);
+
+                        System.IO.Directory.SetCurrentDirectory(outputDir);
+                        ppd.set_PlotMsgString(PlotMessageIndex.DialogTitle, "出图进度");
+                        ppd.OnBeginPlot();
+                        pe.BeginPlot(ppd, null);
+                        pe.BeginDocument(pi, doc.Name, null, 1, true, outputFile);
+
+                        PlotPageInfo ppi = new PlotPageInfo();
+                        pe.BeginPage(ppi, pi, true, null);
+                        pe.BeginGenerateGraphics(null);
+                        pe.EndGenerateGraphics(null);
+                        pe.EndPage(null);
+                        pe.EndDocument(null);
+                        pe.EndPlot(null);
+
+                        tr.Commit();
+                        ed.WriteMessage($"\nPNG 图片已输出到: {outputFile}");
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ed.WriteMessage($"\n出图失败: {ex.Message}");
+                        tr.Abort();
+                        throw; // 重新抛出异常以便在finally中处理
+                    }
+                }
+            }
+            finally
+            {
+                // 8. 恢复图层状态
+                try
+                {
+                    using (Transaction tr = db.TransactionManager.StartTransaction())
+                    {
+                        LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                        foreach (ObjectId layerId in lt)
+                        {
+                            LayerTableRecord ltr = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForWrite);
+                            if (originalLayerStates.ContainsKey(ltr.Name))
+                                ltr.IsOff = originalLayerStates[ltr.Name];
+                        }
+                        tr.Commit();
+                        ed.WriteMessage("\n已恢复图层原始状态");
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    ed.WriteMessage($"\n恢复图层状态失败: {ex.Message}");
+                }
+            }
+        }
+        [CommandMethod("LIST_PLOT_PAPERS", CommandFlags.Session)]
+        public void ListPlotPapers()
+        {
+            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+            Editor ed = doc.Editor;
+
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                LayoutManager lm = LayoutManager.Current;
+                ObjectId layoutId = lm.GetLayoutId(lm.CurrentLayout);
+                Layout layout = (Layout)tr.GetObject(layoutId, OpenMode.ForRead);
+
+                PlotSettings ps = new PlotSettings(layout.ModelType);
+                ps.CopyFrom(layout);
+
+                PlotSettingsValidator psv = PlotSettingsValidator.Current;
+
+                // 设置打印机名称
+                string printerName = "PublishToWeb PNG.pc3"; // 可替换为你需要的打印机
+                psv.SetPlotConfigurationName(ps, printerName, null);
+                psv.RefreshLists(ps);
+
+                // 获取所有纸张尺寸
+                var mediaNames = psv.GetCanonicalMediaNameList(ps);
+
+                ed.WriteMessage($"\n打印机: {printerName} 支持的纸张尺寸：");
+                foreach (string name in mediaNames)
+                {
+                    ed.WriteMessage($"\n{name}");
+                }
+                tr.Commit();
+            }
+        }
         #endregion
     }
-    }
+}
