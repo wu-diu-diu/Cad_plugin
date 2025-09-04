@@ -582,7 +582,7 @@ namespace CoDesignStudy.Cad.PlugIn
             }
         }
 
-        [CommandMethod("PLOT_TO_PNG", CommandFlags.Session)]
+        [CommandMethod("PLOT_DISPLAY", CommandFlags.Session)]
         public void PlotToPng()
         {
             Document doc = CADApplication.DocumentManager.MdiActiveDocument;
@@ -673,7 +673,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 "PUB_TEXT",
                 "PUB_HATCH",
                 "WINDOW",
-                "WALL"
+                "COLUMN"
                 // 在这里添加你需要打印的图层名称
             };
 
@@ -780,7 +780,7 @@ namespace CoDesignStudy.Cad.PlugIn
 
                         psv.SetUseStandardScale(ps, true);
                         psv.SetStdScaleType(ps, StdScaleType.ScaleToFit);
-                        psv.SetPlotRotation(ps, PlotRotation.Degrees000);
+                        psv.SetPlotRotation(ps, PlotRotation.Degrees090);
 
                         PlotInfo pi = new PlotInfo { Layout = layoutId, OverrideSettings = ps };
                         PlotInfoValidator piv = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled };
