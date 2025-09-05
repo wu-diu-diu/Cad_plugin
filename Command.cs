@@ -4,6 +4,9 @@ using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.PlottingServices;
 using Autodesk.AutoCAD.Runtime;
+using DocumentFormat.OpenXml.Presentation;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.ClientModel;
 using System.Collections.Generic;
@@ -26,13 +29,32 @@ namespace CoDesignStudy.Cad.PlugIn
     /// <summary>
     /// 入口
     /// </summary>
-    
+    // 定义数据模型类
+    public class CADResponse
+    {
+        public bool success { get; set; }
+        public string message { get; set; }
+        public int total_images { get; set; }
+        public int processed_images { get; set; }
+        public Dictionary<string, List<RoomData>> results { get; set; }
+        public Dictionary<string, string> errors { get; set; }
+    }
+
+    public class RoomData
+    {
+        public string room_name { get; set; }
+        public List<List<List<double>>> cad_coordinates { get; set; }
+    }
+
     public class Command : IExtensionApplication
     {
         #region 成员变量
         public static PaletteSetDlg DlgInstance;
         // 存储上一次插入的图元
         //List<ObjectId> lastInsertedEntities = new List<ObjectId>();
+        Dictionary<string, double> Cadparam = new Dictionary<string, double>();
+        public static string ImagePath = "";
+        public static string serverUrl = "http://127.0.0.1:8000";
 
         #endregion
 
@@ -661,8 +683,9 @@ namespace CoDesignStudy.Cad.PlugIn
             Document doc = CADApplication.DocumentManager.MdiActiveDocument;
             Database db = doc.Database;
             Editor ed = doc.Editor;
-            string outputDir = @"C:\Users\武丢丢\Documents\cadpdf";
+            string outputDir = @"C:\Users\武丢丢\Documents\upload_test";
             string outputFile = Path.Combine(outputDir, "output.png");
+            ImagePath = outputFile;
             if (!Directory.Exists(outputDir))
                 Directory.CreateDirectory(outputDir);
 
@@ -707,10 +730,18 @@ namespace CoDesignStudy.Cad.PlugIn
             double xmax = Math.Max(pt1.X, pt2.X);
             double ymin = Math.Min(pt1.Y, pt2.Y);
             double ymax = Math.Max(pt1.Y, pt2.Y);
+            Cadparam["xmin"] = xmin;
+            Cadparam["xmax"] = xmax;
+            Cadparam["ymin"] = ymin;
+            Cadparam["ymax"] = ymax;
+            Cadparam["originx"] = -13.0;
+            Cadparam["originy"] = 11.0;
             Point3d leftBottom = new Point3d(xmin, ymin, 0);
             Point3d rightBottom = new Point3d(xmax, ymin, 0);
             Point3d rightTop = new Point3d(xmax, ymax, 0);
             Point3d leftTop = new Point3d(xmin, ymax, 0);
+            double originx = -13.0;
+            double originy = 11.0;
 
             // 4. 打印窗口四个点坐标和原点偏移量
             ed.WriteMessage($"\n窗口四个角点坐标：");
@@ -719,7 +750,7 @@ namespace CoDesignStudy.Cad.PlugIn
             ed.WriteMessage($"\n右上: ({rightTop.X}, {rightTop.Y})");
             ed.WriteMessage($"\n左上: ({leftTop.X}, {leftTop.Y})");
             ed.WriteMessage($"\n窗口范围：xmin={xmin}, xmax={xmax}, ymin={ymin}, ymax={ymax}");
-            ed.WriteMessage($"\n窗口左下角（原点）偏移量：({leftBottom.X}, {leftBottom.Y})");
+            ed.WriteMessage($"\n窗口左下角（原点）偏移量：({originx}, {originy})");
 
             // 5. 记录所有图层的原始状态
 
@@ -802,6 +833,7 @@ namespace CoDesignStudy.Cad.PlugIn
 
                         tr.Commit();
                         ed.WriteMessage($"\nPNG 图片已输出到: {outputFile}");
+
                     }
                     catch (System.Exception ex)
                     {
@@ -867,6 +899,108 @@ namespace CoDesignStudy.Cad.PlugIn
                     ed.WriteMessage($"\n{name}");
                 }
                 tr.Commit();
+            }
+        }
+        [CommandMethod("UPLOAD_CAD", CommandFlags.Session)]
+        public async void UploadCADCommand()
+        {
+            var doc = CADApplication.DocumentManager.MdiActiveDocument;
+            var ed = doc.Editor;
+            if (!File.Exists(ImagePath))
+            {
+                ed.WriteMessage($"\n图片文件不存在: {ImagePath}");
+                return;
+            }
+
+            try
+            {
+                using (var client = new HttpClient())
+                {
+                    client.Timeout = TimeSpan.FromMinutes(5); // 设置5分钟超时
+
+                    using (var form = new MultipartFormDataContent())
+                    {
+                        byte[] fileBytes = File.ReadAllBytes(ImagePath);
+                        var fileContent = new ByteArrayContent(fileBytes);
+                        fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
+                        form.Add(fileContent, "files", Path.GetFileName(ImagePath));
+
+                        // 构造参数JSON
+                        string paramJson = $@"{{
+                            ""Xmin"": {Cadparam["xmin"]},
+                            ""Ymin"": {Cadparam["ymin"]},
+                            ""Xmax"": {Cadparam["xmax"]},
+                            ""Ymax"": {Cadparam["ymax"]},
+                            ""originx"": {Cadparam["originx"]},
+                            ""originy"": {Cadparam["originy"]}
+                        }}";
+
+
+                        form.Add(new StringContent(paramJson, Encoding.UTF8), "cad_params");
+
+
+                        // 发送POST请求到正确的端点
+                        string uploadUrl = $"{serverUrl}/upload-and-process";
+                        var response = await client.PostAsync(uploadUrl, form);
+                        string result = await response.Content.ReadAsStringAsync();
+
+                        if (response.IsSuccessStatusCode)
+                        {
+                            ed.WriteMessage($"\n✅ 图片和参数已成功发送到服务器");
+
+                            // 使用强类型解析
+                            try
+                            {
+                                var cadResponse = JsonConvert.DeserializeObject<CADResponse>(result);
+
+                                ed.WriteMessage($"\n📊 处理结果: {cadResponse.processed_images}/{cadResponse.total_images} 个图像成功");
+
+                                if (cadResponse.success && cadResponse.results != null)
+                                {
+                                    foreach (var imageResult in cadResponse.results)
+                                    {
+                                        string imageName = imageResult.Key;
+                                        List<RoomData> rooms = imageResult.Value;
+
+                                        ed.WriteMessage($"\n图片: {imageName}");
+                                        ed.WriteMessage($"发现 {rooms.Count} 个房间:");
+
+                                        foreach (var room in rooms)
+                                        {
+                                            ed.WriteMessage($"  - {room.room_name}: {room.cad_coordinates[0].Count} 个坐标点");
+
+                                            // CreateRoomInCAD(room.room_name, room.cad_coordinates);
+                                        }
+                                    }
+                                }
+                            }
+                            catch (System.Exception parseEx)
+                            {
+                                ed.WriteMessage($"\n⚠️ 解析返回结果失败: {parseEx.Message}");
+                            }
+                        }
+                        else
+                        {
+                            ed.WriteMessage($"\n❌ 发送失败，状态码：{response.StatusCode}");
+                            ed.WriteMessage($"\n错误详情：{result}");
+                        }
+                    }
+                }
+            }
+            catch (HttpRequestException httpEx)
+            {
+                ed.WriteMessage($"\n❌ 网络请求失败: {httpEx.Message}");
+                ed.WriteMessage("\n请检查服务器地址和网络连接");
+            }
+            catch (TaskCanceledException timeoutEx)
+            {
+                ed.WriteMessage($"\n❌ 请求超时: {timeoutEx.Message}");
+                ed.WriteMessage("\n图片处理可能需要更长时间，请稍后重试");
+            }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage($"\n❌ 发生异常: {ex.Message}");
+                ed.WriteMessage($"\n详细错误: {ex.StackTrace}");
             }
         }
         #endregion
