@@ -113,14 +113,18 @@ namespace CoDesignStudy.Cad.PlugIn
 
                 var client = new QwenClient("qwen-plus", apiKey);
                 
-                // 初始化对话历史，包含系统消息
+                // 初始化对话历史，包含系统消息，并添加天气工具选项
                 List<ChatMessage> messages = new List<ChatMessage>
                 {
-                    new SystemChatMessage("You are a helpful assistant for AutoCAD users. You can help with CAD operations, drawing commands, and general questions.")
+                    new SystemChatMessage("You are a helpful assistant for AutoCAD users. You can help with CAD operations, drawing commands, weather queries, and general questions. When users ask about weather, use the available tools to get current weather information.")
                 };
 
+                // 创建包含天气工具的选项
+                ChatCompletionOptions options = QwenClient.CreateWeatherToolsOptions();
+
                 ed.WriteMessage("\n=== QwenSDK 对话模式已启动 ===");
-                ed.WriteMessage("\n提示：输入消息进行对话，输入 'exit' 或 'quit' 退出");
+                ed.WriteMessage("\n提示：输入消息进行对话，支持天气查询功能");
+                ed.WriteMessage("\n输入 'exit' 或 'quit' 退出，输入 'clear' 清除对话历史");
                 ed.WriteMessage("\n" + new string('-', 50));
 
                 while (true)
@@ -156,7 +160,7 @@ namespace CoDesignStudy.Cad.PlugIn
                     {
                         // 清除对话历史，只保留系统消息
                         messages.Clear();
-                        messages.Add(new SystemChatMessage("You are a helpful assistant for AutoCAD users. You can help with CAD operations, drawing commands, and general questions."));
+                        messages.Add(new SystemChatMessage("You are a helpful assistant for AutoCAD users. You can help with CAD operations, drawing commands, weather queries, and general questions. When users ask about weather, use the available tools to get current weather information."));
                         ed.WriteMessage("\n对话历史已清除。");
                         continue;
                     }
@@ -168,14 +172,62 @@ namespace CoDesignStudy.Cad.PlugIn
                     {
                         ed.WriteMessage("\nAI正在思考...");
                         
-                        // 发送请求到AI
-                        var result = await client.CompleteChatAsync(messages);
-                        
-                        // 显示AI回复
-                        ed.WriteMessage($"\nAI: {result.Content}");
-                        
-                        // 添加AI回复到历史
-                        messages.Add(new AssistantChatMessage(result.Content));
+                        // 处理可能的工具调用循环
+                        bool requiresAction;
+                        do
+                        {
+                            requiresAction = false;
+                            
+                            // 发送请求到AI
+                            var result = await client.CompleteChatAsync(messages, options);
+                            
+                            switch (result.FinishReason)
+                            {
+                                case ChatFinishReason.Stop:
+                                    // 添加AI回复到历史
+                                    messages.Add(new AssistantChatMessage(result));
+                                    // 显示AI回复
+                                    ed.WriteMessage($"\nAI: {result.Content}");
+                                    break;
+
+                                case ChatFinishReason.ToolCalls:
+                                    // 首先添加带有工具调用的助手消息到对话历史
+                                    messages.Add(new AssistantChatMessage(result));
+                                    
+                                    // 处理每个工具调用
+                                    foreach (ChatToolCall toolCall in result.ToolCalls)
+                                    {
+                                        ed.WriteMessage($"\n🔧 调用工具: {toolCall.FunctionName}");
+                                        if (!string.IsNullOrEmpty(toolCall.FunctionArguments))
+                                        {
+                                            ed.WriteMessage($"   参数: {toolCall.FunctionArguments}");
+                                        }
+                                        
+                                        string toolResult = await QwenClient.HandleToolCall(toolCall);
+                                        ed.WriteMessage($"   结果: {toolResult}");
+                                        
+                                        messages.Add(new ToolChatMessage(toolCall.Id, toolResult));
+                                    }
+                                    
+                                    requiresAction = true;
+                                    break;
+                                    
+                                case ChatFinishReason.Length:
+                                    ed.WriteMessage("\n⚠️ 由于MaxTokens参数或令牌限制，模型输出不完整。");
+                                    messages.Add(new AssistantChatMessage(result));
+                                    break;
+                                    
+                                case ChatFinishReason.ContentFilter:
+                                    ed.WriteMessage("\n⚠️ 由于内容过滤标志，输出被省略。");
+                                    messages.Add(new AssistantChatMessage(result));
+                                    break;
+                                    
+                                default:
+                                    ed.WriteMessage($"\n⚠️ 未处理的完成原因: {result.FinishReason}");
+                                    messages.Add(new AssistantChatMessage(result));
+                                    break;
+                            }
+                        } while (requiresAction);
                         
                     }
                     catch (System.Exception ex)
@@ -1159,125 +1211,6 @@ namespace CoDesignStudy.Cad.PlugIn
             catch (System.Exception ex)
             {
                 ed.WriteMessage($"\n❌ 发生异常: {ex.Message}");
-                ed.WriteMessage($"\n详细错误: {ex.StackTrace}");
-            }
-        }
-        [CommandMethod("TEST_NETWORK", CommandFlags.Session)]
-        public static async void TestNetwork()
-        {
-            var ed = CADApplication.DocumentManager.MdiActiveDocument.Editor;
-
-            try
-            {
-                using (var client = new HttpClient())
-                {
-                    client.Timeout = TimeSpan.FromSeconds(10);
-                    var response = await client.GetAsync("https://www.baidu.com");
-                    ed.WriteMessage($"\n网络测试成功，状态码: {response.StatusCode}");
-                }
-            }
-            catch (System.Exception ex)
-            {
-                ed.WriteMessage($"\n网络测试失败: {ex.Message}");
-            }
-        }
-
-        [CommandMethod("WEATHER_TOOL_TEST", CommandFlags.Session)]
-        public static async void WeatherToolTest()
-        {
-            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
-            Editor ed = doc.Editor;
-            
-            try
-            {
-                // 使用环境变量获取API密钥和BaseURL
-                string apiKey = Environment.GetEnvironmentVariable("DASHSCOPE_API_KEY");
-                //string baseUrl = Environment.GetEnvironmentVariable("DASHSCOPE_BASE_URL") ?? "https://dashscope.aliyuncs.com";
-                
-                if (string.IsNullOrEmpty(apiKey))
-                {
-                    ed.WriteMessage("\nAPI Key 未设置。请确保环境变量 'DASHSCOPE_API_KEY' 已设置。");
-                    return;
-                }
-
-                var client = new QwenClient("qwen-plus", apiKey);
-                
-                List<ChatMessage> messages = new List<ChatMessage>
-                {
-                    new UserChatMessage("今天天气怎么样？")
-                };
-
-                // 创建带有天气工具的选项
-                ChatCompletionOptions options = QwenClient.CreateWeatherToolsOptions();
-
-                ed.WriteMessage($"\n用户 >>> {messages[0].Content[0].Text}");
-                ed.WriteMessage("\n=== 开始天气工具测试 ===");
-
-                bool requiresAction;
-
-                do
-                {
-                    requiresAction = false;
-                    ed.WriteMessage("\nAI 正在思考...");
-                    
-                    ChatCompletion completion = await client.CompleteChatAsync(messages, options);
-
-                    switch (completion.FinishReason)
-                    {
-                        case ChatFinishReason.Stop:
-                            {
-                                // 添加助手消息到对话历史
-                                messages.Add(new AssistantChatMessage(completion));
-                                break;
-                            }
-
-                        case ChatFinishReason.ToolCalls:
-                            {
-                                // 首先添加带有工具调用的助手消息到对话历史
-                                messages.Add(new AssistantChatMessage(completion));
-
-                                // 处理每个工具调用
-                                foreach (ChatToolCall toolCall in completion.ToolCalls)
-                                {
-                                    ed.WriteMessage($"\n🔧 调用工具: {toolCall.FunctionName}");
-                                    ed.WriteMessage($"   参数: {toolCall.FunctionArguments}");
-                                    
-                                    string toolResult = await QwenClient.HandleToolCall(toolCall);
-                                    ed.WriteMessage($"   结果: {toolResult}");
-                                    
-                                    messages.Add(new ToolChatMessage(toolCall.Id, toolResult));
-                                }
-
-                                requiresAction = true;
-                                break;
-                            }
-
-                        case ChatFinishReason.Length:
-                            ed.WriteMessage("\n⚠️ 由于MaxTokens参数或令牌限制，模型输出不完整。");
-                            break;
-
-                        case ChatFinishReason.ContentFilter:
-                            ed.WriteMessage("\n⚠️ 由于内容过滤标志，输出被省略。");
-                            break;
-
-                        default:
-                            ed.WriteMessage($"\n⚠️ 未处理的完成原因: {completion.FinishReason}");
-                            break;
-                    }
-                } while (requiresAction);
-
-                // 显示最终回复
-                var lastMessage = messages[messages.Count - 1];
-                if (lastMessage.Content != null && lastMessage.Content.Count > 0)
-                {
-                    ed.WriteMessage($"\nAI >>> {lastMessage.Content[0].Text}");
-                }
-                
-                ed.WriteMessage("\n=== 天气工具测试完成 ===");
-            }
-            catch (System.Exception ex)
-            {
-                ed.WriteMessage($"\n天气工具测试失败: {ex.Message}");
                 ed.WriteMessage($"\n详细错误: {ex.StackTrace}");
             }
         }

@@ -7,7 +7,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using System;
 using System.Linq;
-using System.Text.Json;
+//using System.Text.Json;
 using System.IO.Compression;
 using System.Net.Http.Headers;
 
@@ -726,11 +726,10 @@ namespace FunctionCallingAI
                     var response = await httpClient.GetStringAsync("http://ip-api.com/json/");
 
                     // 解析 JSON
-                    using (var doc = System.Text.Json.JsonDocument.Parse(response))
-                    {
-                        var city = doc.RootElement.GetProperty("city").GetString();
-                        return city ?? "Unknown";
-                    }
+                    var jsonObj = JObject.Parse(response);
+                    var city = jsonObj["city"]?.ToString();
+                    
+                    return city ?? "Unknown";
                 }
                 catch (Exception ex)
                 {
@@ -762,16 +761,15 @@ namespace FunctionCallingAI
                         string geoResponse = await reader.ReadToEndAsync();
 
                         string location_ID = defaultLocationID;
-                        using (var geoDoc = System.Text.Json.JsonDocument.Parse(geoResponse))
+                        var geoObj = JObject.Parse(geoResponse);
+                        var locations = geoObj["location"] as JArray;
+                        if (locations != null && locations.Count > 0)
                         {
-                            if (geoDoc.RootElement.TryGetProperty("location", out var locations) && locations.GetArrayLength() > 0)
-                            {
-                                location_ID = locations[0].GetProperty("id").GetString() ?? defaultLocationID;
-                            }
-                            else
-                            {
-                                throw new Exception($"未找到匹配的城市：{location}");
-                            }
+                            location_ID = locations[0]["id"]?.ToString() ?? defaultLocationID;
+                        }
+                        else
+                        {
+                            throw new Exception($"未找到匹配的城市：{location}");
                         }
 
                         // 2. 获取天气信息
@@ -782,33 +780,31 @@ namespace FunctionCallingAI
                         {
                             string weatherResponse = await readerWeather.ReadToEndAsync();
 
-                            using (var weatherDoc = System.Text.Json.JsonDocument.Parse(weatherResponse))
+                            var weatherObj = JObject.Parse(weatherResponse);
+                            
+                            var code = weatherObj["code"]?.ToString();
+                            if (code != "200")
                             {
-                                var root = weatherDoc.RootElement;
-
-                                if (!root.TryGetProperty("code", out var code) || code.GetString() != "200")
-                                {
-                                    throw new Exception("天气 API 返回异常");
-                                }
-
-                                var now = root.GetProperty("now");
-                                string temp = now.GetProperty("temp").GetString() ?? "未知";
-                                string feelsLike = now.GetProperty("feelsLike").GetString() ?? "未知";
-                                string text = now.GetProperty("text").GetString() ?? "未知";
-                                string windDir = now.GetProperty("windDir").GetString() ?? "未知";
-                                string windScale = now.GetProperty("windScale").GetString() ?? "未知";
-                                string humidity = now.GetProperty("humidity").GetString() ?? "未知";
-                                string precip = now.GetProperty("precip").GetString() ?? "未知";
-                                string pressure = now.GetProperty("pressure").GetString() ?? "未知";
-
-                                // 单位转换（和风天气默认摄氏度）
-                                if (unit.ToLower() == "fahrenheit" && double.TryParse(temp, out double c))
-                                {
-                                    temp = ((c * 9 / 5) + 32).ToString("F1");
-                                    feelsLike = (double.TryParse(feelsLike, out double f) ? ((f * 9 / 5) + 32).ToString("F1") : feelsLike);
-                                }
-                                return $"天气：{text}，气温：{temp}{unit}，体感温度：{feelsLike}{unit}，风向：{windDir}，风力：{windScale}级，湿度：{humidity}%，降水量：{precip}mm，气压：{pressure}hPa";
+                                throw new Exception("天气 API 返回异常");
                             }
+
+                            var now = weatherObj["now"];
+                            string temp = now?["temp"]?.ToString() ?? "未知";
+                            string feelsLike = now?["feelsLike"]?.ToString() ?? "未知";
+                            string text = now?["text"]?.ToString() ?? "未知";
+                            string windDir = now?["windDir"]?.ToString() ?? "未知";
+                            string windScale = now?["windScale"]?.ToString() ?? "未知";
+                            string humidity = now?["humidity"]?.ToString() ?? "未知";
+                            string precip = now?["precip"]?.ToString() ?? "未知";
+                            string pressure = now?["pressure"]?.ToString() ?? "未知";
+
+                            // 单位转换（和风天气默认摄氏度）
+                            if (unit.ToLower() == "fahrenheit" && double.TryParse(temp, out double c))
+                            {
+                                temp = ((c * 9 / 5) + 32).ToString("F1");
+                                feelsLike = (double.TryParse(feelsLike, out double f) ? ((f * 9 / 5) + 32).ToString("F1") : feelsLike);
+                            }
+                            return $"天气：{text}，气温：{temp}{unit}，体感温度：{feelsLike}{unit}，风向：{windDir}，风力：{windScale}级，湿度：{humidity}%，降水量：{precip}mm，气压：{pressure}hPa";
                         }
                     }
                 }
