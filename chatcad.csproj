@@ -256,7 +256,6 @@
     <Compile Include="Command.cs" />
     <Compile Include="InsertTracker.cs" />
     <Compile Include="CadDrawingHelper.cs" />
-    <Compile Include="QwenExample.cs" />
     <Compile Include="QwenClient.cs" />
     <Compile Include="Vertex.cs" />
     <Compile Include="Prompt.cs" />

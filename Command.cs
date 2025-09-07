@@ -5,6 +5,7 @@ using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.PlottingServices;
 using Autodesk.AutoCAD.Runtime;
 using DocumentFormat.OpenXml.Presentation;
+using FunctionCallingAI;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
@@ -19,6 +20,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using static Microsoft.IO.RecyclableMemoryStreamManager;
 using CADApplication = Autodesk.AutoCAD.ApplicationServices.Application;
 
 
@@ -92,6 +94,163 @@ namespace CoDesignStudy.Cad.PlugIn
             catch (System.Exception ex)
             {
                 MessageBox.Show("测试", ex.Message);
+            }
+        }
+        [CommandMethod("QWENSDK", CommandFlags.Session)]
+        public static async void Qwen()
+        {
+            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            Editor ed = doc.Editor;
+            
+            try
+            {
+                string apiKey = Environment.GetEnvironmentVariable("DASHSCOPE_API_KEY");
+                if (string.IsNullOrEmpty(apiKey))
+                {
+                    ed.WriteMessage("\nAPI Key 未设置。请确保环境变量 'DASHSCOPE_API_KEY' 已设置。");
+                    return;
+                }
+
+                var client = new QwenClient("qwen-plus", apiKey);
+                
+                // 初始化对话历史，包含系统消息
+                List<ChatMessage> messages = new List<ChatMessage>
+                {
+                    new SystemChatMessage("You are a helpful assistant for AutoCAD users. You can help with CAD operations, drawing commands, and general questions.")
+                };
+
+                ed.WriteMessage("\n=== QwenSDK 对话模式已启动 ===");
+                ed.WriteMessage("\n提示：输入消息进行对话，输入 'exit' 或 'quit' 退出");
+                ed.WriteMessage("\n" + new string('-', 50));
+
+                while (true)
+                {
+                    // 获取用户输入
+                    PromptStringOptions pso = new PromptStringOptions("\n用户: ")
+                    {
+                        AllowSpaces = true
+                    };
+                    PromptResult pr = ed.GetString(pso);
+                    
+                    if (pr.Status != PromptStatus.OK)
+                    {
+                        ed.WriteMessage("\n对话已取消。");
+                        break;
+                    }
+
+                    string userInput = pr.StringResult.Trim();
+                    
+                    // 检查退出命令
+                    if (string.IsNullOrEmpty(userInput))
+                    {
+                        continue;
+                    }
+                    
+                    if (userInput.ToLower() == "exit" || userInput.ToLower() == "quit")
+                    {
+                        ed.WriteMessage("\n=== 对话结束 ===");
+                        break;
+                    }
+                    
+                    if (userInput.ToLower() == "clear")
+                    {
+                        // 清除对话历史，只保留系统消息
+                        messages.Clear();
+                        messages.Add(new SystemChatMessage("You are a helpful assistant for AutoCAD users. You can help with CAD operations, drawing commands, and general questions."));
+                        ed.WriteMessage("\n对话历史已清除。");
+                        continue;
+                    }
+
+                    // 添加用户消息到历史
+                    messages.Add(new UserChatMessage(userInput));
+                    
+                    try
+                    {
+                        ed.WriteMessage("\nAI正在思考...");
+                        
+                        // 发送请求到AI
+                        var result = await client.CompleteChatAsync(messages);
+                        
+                        // 显示AI回复
+                        ed.WriteMessage($"\nAI: {result.Content}");
+                        
+                        // 添加AI回复到历史
+                        messages.Add(new AssistantChatMessage(result.Content));
+                        
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ed.WriteMessage($"\n请求失败: {ex.Message}");
+                        ed.WriteMessage("\n请重试或检查网络连接。");
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage($"\n启动对话模式失败: {ex.Message}");
+            }
+        }
+        
+        [CommandMethod("QWENSTREAM", CommandFlags.Session)]
+        public static async void QwenStream()
+        {
+            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            Editor ed = doc.Editor;
+            
+            try
+            {
+                string apiKey = Environment.GetEnvironmentVariable("DASHSCOPE_API_KEY");
+                if (string.IsNullOrEmpty(apiKey))
+                {
+                    ed.WriteMessage("\nAPI Key 未设置。请确保环境变量 'DASHSCOPE_API_KEY' 已设置。");
+                    return;
+                }
+
+                var client = new QwenClient("qwen-plus", apiKey);
+                
+                List<ChatMessage> messages = new List<ChatMessage>
+                {
+                    new SystemChatMessage("You are a helpful assistant."),
+                    new UserChatMessage("告诉我CAD中模型空间和布局空间的区别")
+                };
+
+                ed.WriteMessage("\n=== 流式输出测试开始 ===");
+                ed.WriteMessage("\n问题：告诉我CAD中模型空间和布局空间的区别");
+                ed.WriteMessage("\n" + new string('-', 40));
+                ed.WriteMessage("\nAI回复: ");
+
+                // 用于累积完整回复的变量
+                string fullResponse = "";
+                
+                // 定义流式回调处理函数
+                StreamingResponseHandler streamHandler = (StreamingChatCompletionUpdate update) =>
+                {
+                    if (!string.IsNullOrEmpty(update.Content))
+                    {
+                        // 实时输出每个片段
+                        ed.WriteMessage(update.Content);
+                        fullResponse += update.Content;
+                    }
+                    
+                    // 检查是否完成
+                    if (update.IsFinished)
+                    {
+                        ed.WriteMessage("\n" + new string('-', 40));
+                        ed.WriteMessage($"\n流式输出完成！完整回复长度: {fullResponse.Length} 字符");
+                        ed.WriteMessage($"\n结束原因: {update.FinishReason}");
+                    }
+                };
+
+                // 发送流式请求
+                await client.CompleteChatStreamingAsync(messages, streamHandler);
+                
+                ed.WriteMessage("\n=== 流式输出测试结束 ===");
+                
+            }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage($"\n流式请求失败: {ex.Message}");
+                ed.WriteMessage($"\n错误详情: {ex.StackTrace}");
             }
         }
         [CommandMethod("ALIYUN_QWEN_CHAT", CommandFlags.Session)]
@@ -1001,6 +1160,25 @@ namespace CoDesignStudy.Cad.PlugIn
             {
                 ed.WriteMessage($"\n❌ 发生异常: {ex.Message}");
                 ed.WriteMessage($"\n详细错误: {ex.StackTrace}");
+            }
+        }
+        [CommandMethod("TEST_NETWORK", CommandFlags.Session)]
+        public static async void TestNetwork()
+        {
+            var ed = CADApplication.DocumentManager.MdiActiveDocument.Editor;
+
+            try
+            {
+                using (var client = new HttpClient())
+                {
+                    client.Timeout = TimeSpan.FromSeconds(10);
+                    var response = await client.GetAsync("https://www.baidu.com");
+                    ed.WriteMessage($"\n网络测试成功，状态码: {response.StatusCode}");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage($"\n网络测试失败: {ex.Message}");
             }
         }
         #endregion
