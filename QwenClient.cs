@@ -7,6 +7,9 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using System;
 using System.Linq;
+using System.Text.Json;
+using System.IO.Compression;
+using System.Net.Http.Headers;
 
 namespace FunctionCallingAI
 {
@@ -488,7 +491,7 @@ namespace FunctionCallingAI
                                             }
                                         }
                                     }
-                                    catch (JsonException jsonEx)
+                                    catch (Newtonsoft.Json.JsonException jsonEx)
                                     {
                                         System.Diagnostics.Debug.WriteLine($"QwenClient JSON解析错误: {jsonEx.Message}, 数据: {data}");
                                         // 继续处理下一行，不中断流
@@ -669,6 +672,198 @@ namespace FunctionCallingAI
         {
             // 不再需要处理 HttpClient，因为每次请求都会创建新的实例并自动释放
         }
+
+        #region 内置工具定义
+        
+        // 获取当前天气工具
+        public static readonly ChatTool GetCurrentWeatherTool = ChatTool.CreateFunctionTool(
+            functionName: nameof(GetCurrentWeather),
+            functionDescription: "获取指定城市（中文拼音）的当前天气信息。请自动从用户问题中提取城市拼音作为 location 参数，例如用户问 北京，则提取为'beijing'，用户问西安，则提取为'xian'。",
+            functionParameters: BinaryData.FromBytes(@"{
+                    ""type"": ""object"",
+                    ""properties"": {
+                        ""location"": {
+                            ""type"": ""string"",
+                            ""description"": ""城市名称，必须为中文拼音。请自动从用户问题中提取城市拼音，例如 beijing、shanghai、xian。""
+                        },
+                        ""unit"": {
+                            ""type"": ""string"",
+                            ""enum"": [ ""摄氏度"", ""华氏度"" ],
+                            ""description"": ""温度单位，可选摄氏度或者华氏度。用户没有特别指定则使用摄氏度为单位。""
+                        }
+                    },
+                    ""required"": [ ""location"" ]
+                }")
+        );
+
+        // 获取当前城市工具
+        public static readonly ChatTool GetCurrentCityTool = ChatTool.CreateFunctionTool(
+            functionName: nameof(GetCurrentCity),
+            functionDescription: "获取当前用户的所在城市名称。无需用户输入城市，直接调用接口自动获取用户IP并解析出城市名。",
+            functionParameters: BinaryData.FromBytes(@"{
+                    ""type"": ""object"",
+                    ""properties"": {
+                        ""ip"": {
+                            ""type"": ""string"",
+                            ""description"": ""用户的公网IP地址。如果未提供，将自动获取用户当前的公网IP。""
+                        }
+                    },
+                    ""required"": []
+                }")
+        );
+
+        #endregion
+
+        #region 工具实现方法
+
+        public static async Task<string> GetCurrentCity()
+        {
+            using (var httpClient = new HttpClient())
+            {
+                try
+                {
+                    // 发送异步 GET 请求
+                    var response = await httpClient.GetStringAsync("http://ip-api.com/json/");
+
+                    // 解析 JSON
+                    using (var doc = System.Text.Json.JsonDocument.Parse(response))
+                    {
+                        var city = doc.RootElement.GetProperty("city").GetString();
+                        return city ?? "Unknown";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    return $"无法获取城市信息: {ex.Message}";
+                }
+            }
+        }
+
+        public static async Task<string> GetCurrentWeather(string location, string unit = "摄氏度")
+        {
+            // 你需要在和风天气官网申请一个免费的key
+            string apihost = "mu3aapfdmf.re.qweatherapi.com";
+            string defaultLocationID = "101010100"; // 默认北京市
+            string jwt_token = "eyJhbGciOiJFZERTQSIsImtpZCI6IlQ3UFQ4TVBZTkUifQ.eyJzdWIiOiIyQzJFUUg4V05EIiwiaWF0IjoxNzU3MjYyNzMwLCJleHAiOjE3NTcyNjk5MzB9.ZCZAP3H34izTlg6JHnHNStIcbL3P8vIfL2nJcxe1uhXAv8G30SdNxhFPHaG88YVc7epH7UOW7XtR2lfqinzWAA";
+
+            try
+            {
+                using (var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+                {
+                    httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", jwt_token);
+                    httpClient.DefaultRequestHeaders.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
+
+                    // 1. 获取城市 ID
+                    string geo_url = $"https://{apihost}/geo/v2/city/lookup?location={Uri.EscapeDataString(location)}";
+                    using (var responseStream = await httpClient.GetStreamAsync(geo_url))
+                    using (var decompressedStream = new GZipStream(responseStream, CompressionMode.Decompress))
+                    using (var reader = new StreamReader(decompressedStream))
+                    {
+                        string geoResponse = await reader.ReadToEndAsync();
+
+                        string location_ID = defaultLocationID;
+                        using (var geoDoc = System.Text.Json.JsonDocument.Parse(geoResponse))
+                        {
+                            if (geoDoc.RootElement.TryGetProperty("location", out var locations) && locations.GetArrayLength() > 0)
+                            {
+                                location_ID = locations[0].GetProperty("id").GetString() ?? defaultLocationID;
+                            }
+                            else
+                            {
+                                throw new Exception($"未找到匹配的城市：{location}");
+                            }
+                        }
+
+                        // 2. 获取天气信息
+                        string weather_url = $"https://{apihost}/v7/weather/now?location={location_ID}";
+                        using (var responseWeather = await httpClient.GetStreamAsync(weather_url))
+                        using (var decompressedWeather = new GZipStream(responseWeather, CompressionMode.Decompress))
+                        using (var readerWeather = new StreamReader(decompressedWeather))
+                        {
+                            string weatherResponse = await readerWeather.ReadToEndAsync();
+
+                            using (var weatherDoc = System.Text.Json.JsonDocument.Parse(weatherResponse))
+                            {
+                                var root = weatherDoc.RootElement;
+
+                                if (!root.TryGetProperty("code", out var code) || code.GetString() != "200")
+                                {
+                                    throw new Exception("天气 API 返回异常");
+                                }
+
+                                var now = root.GetProperty("now");
+                                string temp = now.GetProperty("temp").GetString() ?? "未知";
+                                string feelsLike = now.GetProperty("feelsLike").GetString() ?? "未知";
+                                string text = now.GetProperty("text").GetString() ?? "未知";
+                                string windDir = now.GetProperty("windDir").GetString() ?? "未知";
+                                string windScale = now.GetProperty("windScale").GetString() ?? "未知";
+                                string humidity = now.GetProperty("humidity").GetString() ?? "未知";
+                                string precip = now.GetProperty("precip").GetString() ?? "未知";
+                                string pressure = now.GetProperty("pressure").GetString() ?? "未知";
+
+                                // 单位转换（和风天气默认摄氏度）
+                                if (unit.ToLower() == "fahrenheit" && double.TryParse(temp, out double c))
+                                {
+                                    temp = ((c * 9 / 5) + 32).ToString("F1");
+                                    feelsLike = (double.TryParse(feelsLike, out double f) ? ((f * 9 / 5) + 32).ToString("F1") : feelsLike);
+                                }
+                                return $"天气：{text}，气温：{temp}{unit}，体感温度：{feelsLike}{unit}，风向：{windDir}，风力：{windScale}级，湿度：{humidity}%，降水量：{precip}mm，气压：{pressure}hPa";
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                return $"获取天气信息失败: {ex.Message}";
+            }
+        }
+
+        #endregion
+
+        #region 工具调用处理
+
+        // 处理工具调用的方法
+        public static async Task<string> HandleToolCall(ChatToolCall toolCall)
+        {
+            try
+            {
+                switch (toolCall.FunctionName)
+                {
+                    case nameof(GetCurrentCity):
+                        return await GetCurrentCity();
+                    
+                    case nameof(GetCurrentWeather):
+                        // 解析参数
+                        var args = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, object>>(toolCall.FunctionArguments);
+                        string location = args.ContainsKey("location") ? args["location"].ToString() : "";
+                        string unit = args.ContainsKey("unit") ? args["unit"].ToString() : "摄氏度";
+                        return await GetCurrentWeather(location, unit);
+                    
+                    default:
+                        return $"未知的工具调用: {toolCall.FunctionName}";
+                }
+            }
+            catch (Exception ex)
+            {
+                return $"工具调用错误: {ex.Message}";
+            }
+        }
+
+        // 创建带有天气工具的ChatCompletionOptions
+        public static ChatCompletionOptions CreateWeatherToolsOptions()
+        {
+            return new ChatCompletionOptions
+            {
+                Tools = new List<ChatTool> 
+                { 
+                    GetCurrentWeatherTool, 
+                    GetCurrentCityTool 
+                }
+            };
+        }
+
+        #endregion
     }
 
     // 兼容性包装类，用于替换原来的 ChatClient
