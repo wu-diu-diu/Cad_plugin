@@ -410,59 +410,123 @@ namespace FunctionCallingAI
             var request = BuildRequest(messages, options);
             var jsonRequest = JsonConvert.SerializeObject(request);
 
+            System.Diagnostics.Debug.WriteLine($"QwenClient 发送流式请求到:{_baseUrl}/compatible-mode/v1/chat/completions");
+            System.Diagnostics.Debug.WriteLine($"请求内容: {jsonRequest}");
+
             using (var content = new StringContent(jsonRequest, Encoding.UTF8, "application/json"))
             {
                 using (var client = new HttpClient())
                 {
                     client.Timeout = TimeSpan.FromSeconds(60); // 流式请求需要更长时间
                     
-                    // 设置请求头
+                    // 设置请求头 - 关键：Accept必须是text/event-stream
                     client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
                     client.DefaultRequestHeaders.Accept.Clear();
                     client.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
 
-                    var response = await client.PostAsync(_baseUrl + "/compatible-mode/v1/chat/completions", content);
-                    response.EnsureSuccessStatusCode();
-
-                    var stream = await response.Content.ReadAsStreamAsync();
                     try
                     {
-                        var reader = new StreamReader(stream);
+                        var response = await client.PostAsync(_baseUrl + "/compatible-mode/v1/chat/completions", content);
+                        System.Diagnostics.Debug.WriteLine($"QwenClient 响应状态码: {response.StatusCode}");
+                        
+                        response.EnsureSuccessStatusCode();
+
+                        var stream = await response.Content.ReadAsStreamAsync();
+                        var reader = new StreamReader(stream, Encoding.UTF8);
+                        
+                        string line;
+                        bool streamStarted = false;
+                        
                         try
                         {
-                            string line;
                             while ((line = await reader.ReadLineAsync()) != null)
                             {
-                                if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data: "))
+                                System.Diagnostics.Debug.WriteLine($"QwenClient 收到行: {line}");
+                                
+                                // 跳过空行
+                                if (string.IsNullOrWhiteSpace(line))
                                     continue;
 
-                                var data = line.Substring(6).Trim();
-                                if (data == "[DONE]")
-                                    break;
-
-                                try
+                                // 处理 data: 开头的行
+                                if (line.StartsWith("data: "))
                                 {
-                                    var streamResponse = JsonConvert.DeserializeObject<DashScopeResponse>(data);
-                                    if (streamResponse?.Choices?.Count > 0)
+                                    streamStarted = true;
+                                    var data = line.Substring(6).Trim();
+                                    
+                                    // 检查是否为结束标记
+                                    if (data == "[DONE]")
                                     {
-                                        var update = ConvertToStreamingUpdate(streamResponse.Choices[0]);
-                                        onUpdate?.Invoke(update);
+                                        System.Diagnostics.Debug.WriteLine("QwenClient 收到 [DONE] 标记，流式响应结束");
+                                        // 发送最终的完成标记
+                                        var finalUpdate = new StreamingChatCompletionUpdate
+                                        {
+                                            Content = "",
+                                            IsFinished = true,
+                                            FinishReason = ChatFinishReason.Stop
+                                        };
+                                        onUpdate?.Invoke(finalUpdate);
+                                        break;
+                                    }
+
+                                    try
+                                    {
+                                        var streamResponse = JsonConvert.DeserializeObject<DashScopeResponse>(data);
+                                        if (streamResponse?.Choices?.Count > 0)
+                                        {
+                                            var choice = streamResponse.Choices[0];
+                                            var update = ConvertToStreamingUpdate(choice);
+                                            
+                                            System.Diagnostics.Debug.WriteLine($"QwenClient 处理更新: Content='{update.Content}', IsFinished={update.IsFinished}");
+                                            
+                                            onUpdate?.Invoke(update);
+                                            
+                                            // 如果这个chunk标记为完成，也要结束
+                                            if (update.IsFinished)
+                                            {
+                                                System.Diagnostics.Debug.WriteLine("QwenClient 检测到 IsFinished=true，流式响应结束");
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    catch (JsonException jsonEx)
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"QwenClient JSON解析错误: {jsonEx.Message}, 数据: {data}");
+                                        // 继续处理下一行，不中断流
                                     }
                                 }
-                                catch (JsonException)
+                            }
+                            
+                            // 如果流已经开始但没有收到 [DONE] 或 IsFinished=true，发送完成信号
+                            if (streamStarted)
+                            {
+                                System.Diagnostics.Debug.WriteLine("QwenClient 流式读取完成，发送最终完成信号");
+                                var finalUpdate = new StreamingChatCompletionUpdate
                                 {
-                                    // 忽略解析错误
-                                }
+                                    Content = "",
+                                    IsFinished = true,
+                                    FinishReason = ChatFinishReason.Stop
+                                };
+                                onUpdate?.Invoke(finalUpdate);
                             }
                         }
                         finally
                         {
                             reader.Dispose();
+                            stream.Dispose();
                         }
                     }
-                    finally
+                    catch (Exception ex)
                     {
-                        stream.Dispose();
+                        System.Diagnostics.Debug.WriteLine($"QwenClient 流式请求异常: {ex.Message}");
+                        // 发送错误完成信号
+                        var errorUpdate = new StreamingChatCompletionUpdate
+                        {
+                            Content = "",
+                            IsFinished = true,
+                            FinishReason = ChatFinishReason.Stop
+                        };
+                        onUpdate?.Invoke(errorUpdate);
+                        throw;
                     }
                 }
             }

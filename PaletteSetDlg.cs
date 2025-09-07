@@ -199,6 +199,407 @@ namespace CoDesignStudy.Cad.PlugIn
 
         #endregion
 
+        #region 简化版消息处理
+        // 简化版的流式消息显示函数 - 增强流式效果
+        public async Task<Control> AppendMessageSimple(string sender, string message, bool isStreaming = false, Action<Action<string>> setUpdateContent = null)
+        {
+            if (string.IsNullOrWhiteSpace(message) && !isStreaming) return null;
+            Control contentControl;
+
+            if (sender == "AI")
+            {
+                // 创建简化的WebView2
+                var webView = new WebView2
+                {
+                    Width = conversationPanel.Width - 150,
+                    Height = 100,
+                    Margin = new Padding(5),
+                    DefaultBackgroundColor = Color.White
+                };
+
+                // 异步初始化
+                await webView.EnsureCoreWebView2Async();
+                
+                if (webView.CoreWebView2 != null)
+                {
+                    // 将初始内容转换为HTML
+                    string html = Markdown.ToHtml(message ?? "", pipeline);
+                    
+                    // 带有Markdown支持的HTML模板
+                    string simpleDoc = $@"
+<!DOCTYPE html>
+<html>
+<head>
+    <script>
+        window.MathJax = {{
+            tex: {{
+                inlineMath: [['$','$'], ['\\(','\\)']],
+                displayMath: [['$$','$$'], ['\\[','\\]']]
+            }},
+            svg: {{
+                fontCache: 'global'
+            }}
+        }};
+    </script>
+    <script src='https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js'></script>
+    <style>
+        body {{
+            font-family: 微软雅黑;
+            font-size: {htmlsize};
+            margin: 8px;
+            padding: 0;
+            background-color: white;
+            line-height: 1.6;
+            word-wrap: break-word;
+            overflow: hidden;
+        }}
+        #content {{
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            min-height: 40px;
+        }}
+        /* 表格样式 */
+        table {{
+            border-collapse: collapse;
+            width: 100%;
+            max-width: 100%;
+            margin: 10px 0;
+            background-color: #fff;
+            table-layout: fixed;
+            word-wrap: break-word;
+        }}
+        th, td {{
+            border: 1px solid #ddd;
+            padding: 8px 12px;
+            text-align: left;
+            vertical-align: top;
+            overflow: hidden;
+            word-break: break-word;
+            hyphens: auto;
+        }}
+        th {{
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }}
+        /* 代码块样式 */
+        pre {{
+            background-color: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            overflow-x: auto;
+        }}
+        code {{
+            background-color: #f5f5f5;
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }}
+        /* 列表样式 */
+        ul, ol {{
+            margin: 10px 0;
+            padding-left: 20px;
+        }}
+        /* 引用样式 */
+        blockquote {{
+            border-left: 4px solid #ddd;
+            margin: 10px 0;
+            padding-left: 16px;
+            color: #666;
+        }}
+    </style>
+</head>
+<body>
+    <div id='content'>{html}</div>
+    <script>
+        let updateTimer = null;
+        let isUpdating = false;
+        let lastReportedHeight = 0;
+        
+        function debounceHeightUpdate() {{
+            if (updateTimer) {{
+                clearTimeout(updateTimer);
+            }}
+            updateTimer = setTimeout(() => {{
+                const content = document.getElementById('content');
+                const height = Math.max(
+                    content.scrollHeight + 16,
+                    content.offsetHeight + 16,
+                    document.documentElement.scrollHeight,
+                    document.body.scrollHeight,
+                    50
+                );
+                
+                if (Math.abs(height - lastReportedHeight) > 3) {{
+                    lastReportedHeight = height;
+                    window.chrome.webview.postMessage(height);
+                }}
+            }}, 30);
+        }}
+        
+        function updateContent(newText) {{
+            if (isUpdating) return;
+            isUpdating = true;
+            
+            const content = document.getElementById('content');
+            
+            requestAnimationFrame(() => {{
+                try {{
+                    // 将Markdown转换的HTML内容设置到页面
+                    content.innerHTML = newText;
+                    
+                    // 立即计算并报告高度
+                    const immediateHeight = Math.max(
+                        content.scrollHeight + 16,
+                        content.offsetHeight + 16,
+                        50
+                    );
+                    
+                    if (Math.abs(immediateHeight - lastReportedHeight) > 3) {{
+                        lastReportedHeight = immediateHeight;
+                        window.chrome.webview.postMessage(immediateHeight);
+                    }}
+                    
+                    if (window.MathJax) {{
+                        MathJax.typesetPromise([content]).then(() => {{
+                            debounceHeightUpdate();
+                            isUpdating = false;
+                        }}).catch(() => {{
+                            debounceHeightUpdate();
+                            isUpdating = false;
+                        }});
+                    }} else {{
+                        debounceHeightUpdate();
+                        isUpdating = false;
+                    }}
+                }} catch(e) {{
+                    console.error('Update error:', e);
+                    isUpdating = false;
+                }}
+            }});
+        }}
+        
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {{
+            if (window.MathJax) {{
+                MathJax.typesetPromise().then(() => {{
+                    debounceHeightUpdate();
+                }});
+            }} else {{
+                debounceHeightUpdate();
+            }}
+        }});
+    </script>
+</body>
+</html>";
+
+                    // 处理来自WebView的消息 - 只处理高度调整
+                    webView.CoreWebView2.WebMessageReceived += (s, a) =>
+                    {
+                        try
+                        {
+                            if (int.TryParse(a.WebMessageAsJson, out int height))
+                            {
+                                if (webView.InvokeRequired)
+                                {
+                                    webView.Invoke(new Action(() =>
+                                    {
+                                        webView.Height = Math.Max(height + 20, 50);
+                                    }));
+                                }
+                                else
+                                {
+                                    webView.Height = Math.Max(height + 20, 50);
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"WebView消息处理错误: {ex.Message}");
+                        }
+                    };
+
+                    // 加载HTML
+                    webView.CoreWebView2.NavigateToString(simpleDoc);
+
+                    // 设置更新函数 - 添加流式显示控制
+                    if (setUpdateContent != null)
+                    {
+                        // 流式显示控制变量
+                        string displayedContent = "";
+                        System.Threading.Timer displayTimer = null;
+                        string fullContent = "";
+                        int currentIndex = 0;
+                        
+                        Action<string> streamingUpdateContent = (newContent) =>
+                        {
+                            System.Diagnostics.Debug.WriteLine($"AppendMessageSimple updateContent 被调用，内容长度: {newContent?.Length ?? 0}");
+                            
+                            if (string.IsNullOrEmpty(newContent)) return;
+                            
+                            // 更新完整内容
+                            fullContent = newContent;
+                            
+                            // 如果这是新的更长的内容，启动或重新启动流式显示
+                            if (fullContent.Length > displayedContent.Length)
+                            {
+                                // 停止之前的定时器
+                                displayTimer?.Dispose();
+                                
+                                // 开始流式显示
+                                displayTimer = new System.Threading.Timer((state) =>
+                                {
+                                    try
+                                    {
+                                        if (currentIndex < fullContent.Length && webView.IsHandleCreated && !webView.IsDisposed)
+                                        {
+                                            // 计算这次要显示的字符数 - 1到3个字符
+                                            int remainingChars = fullContent.Length - currentIndex;
+                                            int charsToShow = Math.Min(remainingChars > 10 ? 3 : 1, remainingChars);
+                                            
+                                            currentIndex += charsToShow;
+                                            string partialContent = fullContent.Substring(0, currentIndex);
+                                            displayedContent = partialContent;
+                                            
+                                            // 将Markdown转换为HTML
+                                            string htmlContent = Markdown.ToHtml(partialContent, pipeline);
+                                            
+                                            // 清理HTML内容中的特殊字符用于JavaScript
+                                            string cleanHtml = htmlContent
+                                                .Replace("\\", "\\\\")
+                                                .Replace("\"", "\\\"")
+                                                .Replace("'", "\\'")
+                                                .Replace("\n", "\\n")
+                                                .Replace("\r", "");
+
+                                            string jsCommand = $"updateContent('{cleanHtml}');";
+                                            
+                                            if (webView.InvokeRequired)
+                                            {
+                                                webView.Invoke(new Action(async () =>
+                                                {
+                                                    try
+                                                    {
+                                                        await webView.CoreWebView2.ExecuteScriptAsync(jsCommand);
+                                                        System.Diagnostics.Debug.WriteLine($"流式显示: {currentIndex}/{fullContent.Length}");
+                                                    }
+                                                    catch (Exception ex)
+                                                    {
+                                                        System.Diagnostics.Debug.WriteLine($"WebView更新错误: {ex.Message}");
+                                                    }
+                                                }));
+                                            }
+                                            else
+                                            {
+                                                webView.CoreWebView2.ExecuteScriptAsync(jsCommand);
+                                                System.Diagnostics.Debug.WriteLine($"流式显示: {currentIndex}/{fullContent.Length}");
+                                            }
+                                        }
+                                        
+                                        // 如果显示完成，停止定时器
+                                        if (currentIndex >= fullContent.Length)
+                                        {
+                                            displayTimer?.Dispose();
+                                            displayTimer = null;
+                                            System.Diagnostics.Debug.WriteLine("流式显示完成");
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"流式显示错误: {ex.Message}");
+                                        displayTimer?.Dispose();
+                                        displayTimer = null;
+                                    }
+                                }, null, 100, 120); // 100ms后开始，每120ms显示几个字符
+                            }
+                        };
+
+                        setUpdateContent(streamingUpdateContent);
+                    }
+                }
+                
+                contentControl = webView;
+            }
+            else // 用户消息
+            {
+                contentControl = new TextBox
+                {
+                    Text = message,
+                    Font = new Font("微软雅黑", fontsize),
+                    MaximumSize = new Size(conversationPanel.Width - 150, 0),
+                    Padding = new Padding(10),
+                    BackColor = Color.LightBlue,
+                    Margin = new Padding(5),
+                    BorderStyle = BorderStyle.None, // 看起来像Label
+                    ReadOnly = true,                // 只读
+                    Multiline = true,              // 支持多行
+                    ScrollBars = ScrollBars.None,  // 不显示滚动条
+                    TabStop = false,               // 不参与Tab导航
+                    Cursor = Cursors.IBeam         // 文本光标
+                };
+                Size textSize = TextRenderer.MeasureText(message, contentControl.Font, contentControl.MaximumSize, TextFormatFlags.WordBreak);
+                contentControl.Height = textSize.Height + 10; // +10 是额外填充防止被裁切
+                // 设置实际宽度和高度
+                contentControl.Width = Math.Min(textSize.Width + contentControl.Padding.Horizontal, conversationPanel.Width - 150);
+                contentControl.Height = textSize.Height + contentControl.Padding.Vertical;
+            }
+
+            // 头像
+            var avatar = new PictureBox
+            {
+                Size = new Size(40, 40),
+                SizeMode = PictureBoxSizeMode.Zoom,
+                Margin = new Padding(5),
+                Image = sender == "用户"
+                    ? System.Drawing.Image.FromFile("userAvatar.png")
+                    : System.Drawing.Image.FromFile("aiAvatar.png")
+            };
+
+            var horizontalPanel = new FlowLayoutPanel
+            {
+                AutoSize = true,
+                FlowDirection = sender == "用户" ? System.Windows.Forms.FlowDirection.RightToLeft : System.Windows.Forms.FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+                Padding = new Padding(0)
+            };
+
+            horizontalPanel.Controls.Add(avatar);
+            horizontalPanel.Controls.Add(contentControl);
+            
+            // 容器面板
+            var container = new FlowLayoutPanel
+            {
+                AutoSize = true,                       // ✅ 必须，确保高度自适应
+                Anchor = AnchorStyles.Left,           // ✅ 防止错位
+                Margin = new Padding(0),              // ✅ 清除默认边距
+                Padding = new Padding(0),
+                FlowDirection = System.Windows.Forms.FlowDirection.LeftToRight,
+                WrapContents = false
+            };
+
+            if (sender == "用户")
+            {
+                container.Controls.Add(new Label() { Width = conversationPanel.Width - horizontalPanel.PreferredSize.Width - 30, AutoSize = false });
+                container.Controls.Add(horizontalPanel);
+            }
+            else
+            {
+                container.Controls.Add(horizontalPanel);
+                container.Controls.Add(new Label() { Width = conversationPanel.Width - horizontalPanel.PreferredSize.Width - 30, AutoSize = false });
+            }
+
+            // 添加到对话面板
+            conversationPanel.Controls.Add(container);
+            
+            // 滚动到底
+            conversationPanel.Controls.Add(new Panel() { Height = 10, Dock = DockStyle.Top });
+            conversationPanel.ScrollControlIntoView(container);
+
+            return contentControl;
+        }
+        #endregion
+
         #region 消息处理
         public async Task<string> SendAsync(string message, string instruction)
         {
@@ -221,7 +622,7 @@ namespace CoDesignStudy.Cad.PlugIn
                 var aiContentControl = await AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
                 // appendmessage在内部实现了一个显示AI回复内容的更新函数并将其赋值给了updatefunc，那么只要在getairesponse中不断调用这个updatefunc，就能不断更新AI回复的内容
                 // 从而实现流式回复的效果。
-                fullAIResponse = await GetAIResponse(message, updateFunc);
+                fullAIResponse = await GetAIResponseWithQwen(message, updateFunc);
             }
             catch (Exception ex)
             {
@@ -242,7 +643,7 @@ namespace CoDesignStudy.Cad.PlugIn
             string userMessage = inputTextBox.Text.Trim();
             inputTextBox.Clear();
 
-            await AppendMessageAsync("用户", userMessage);
+            await AppendMessageSimple("用户", userMessage);
             ScrollToBottom();
             if (!string.IsNullOrWhiteSpace(InsertTracker.WaitingRoomPromptInfo))
             {
@@ -291,11 +692,13 @@ namespace CoDesignStudy.Cad.PlugIn
             try
             {
                 Action<string> updateFunc = null;
-                // 等待 AI 控件初始化并获得更新函数
-                var aiContentControl = await AppendMessageAsync("AI", "", true, setter => updateFunc = setter);
+                // 使用简化版的消息显示函数
+                var aiContentControl = await AppendMessageSimple("AI", "", true, setter => updateFunc = setter);
                 // 设置当前AI控件
                 currentAIControl = aiContentControl;
-                await GetAIResponse(userMessage, updateFunc);
+                await GetAIResponseWithQwen(userMessage, updateFunc);
+                //string response = await GetAIResponseWithQwenNonStream(userMessage);
+                //await AppendMessageAsync("AI", response); // 一次性显示完整回复
             }
             finally
             {
@@ -629,6 +1032,8 @@ namespace CoDesignStudy.Cad.PlugIn
                         // 
                         Action<string> updateContent = (newContent) =>
                         {
+                            System.Diagnostics.Debug.WriteLine($"AppendMessageAsync updateContent 被调用，内容长度: {newContent?.Length ?? 0}");
+                            
                             // 清楚可能的代码块标记
                             string cleanContent = newContent;
                             if (cleanContent.StartsWith("```markdown\n"))
@@ -644,16 +1049,25 @@ namespace CoDesignStudy.Cad.PlugIn
                                 cleanContent = cleanContent.Substring(0, cleanContent.Length - "\n```".Length);
                             }
                             // 内容去重
-                            if (cleanContent == lastContent) return;
+                            if (cleanContent == lastContent)
+                            {
+                                System.Diagnostics.Debug.WriteLine("AppendMessageAsync updateContent 内容重复，跳过更新");
+                                return;
+                            }
                             lastContent = cleanContent;
 
                             // 更新频率控制，避免模型回复太快导致刷屏过快造成UI卡顿
                             var now = DateTime.Now;
-                            if ((now - lastUpdateTime).TotalMilliseconds < 100) // 100ms内不重复更新
+                            var timeSinceLastUpdate = (now - lastUpdateTime).TotalMilliseconds;
+                            // 降低节流时间，确保流式更新更及时
+                            if (timeSinceLastUpdate < 50) // 改为50ms，并且确保最后的内容总是能显示
                             {
+                                System.Diagnostics.Debug.WriteLine($"AppendMessageAsync updateContent 节流限制，距离上次更新: {timeSinceLastUpdate}ms");
                                 return;
                             }
                             lastUpdateTime = now;
+
+                            System.Diagnostics.Debug.WriteLine($"AppendMessageAsync updateContent 开始更新WebView，清理后内容: '{cleanContent.Substring(0, Math.Min(50, cleanContent.Length))}...'");
 
                             try
                             {
@@ -677,12 +1091,18 @@ namespace CoDesignStudy.Cad.PlugIn
                                             // 在网页的上下文中运行JS脚本，参数是javascript代码，会在webview2里加载的网页中运行
                                             // setcontent是上面html网页中的一段js代码，这里就在将每次更新后的html作为参数输入到setcontent中，然后执行setcontent
                                             webView.CoreWebView2?.ExecuteScriptAsync($"setContent(`{htmlUpdate}`);");
+                                            System.Diagnostics.Debug.WriteLine("AppendMessageAsync updateContent WebView.ExecuteScriptAsync 已调用");
                                         }));
                                     }
                                     else
                                     {
                                         webView.CoreWebView2?.ExecuteScriptAsync($"setContent(`{htmlUpdate}`);");
+                                        System.Diagnostics.Debug.WriteLine("AppendMessageAsync updateContent WebView.ExecuteScriptAsync 已调用 (直接调用)");
                                     }
+                                }
+                                else
+                                {
+                                    System.Diagnostics.Debug.WriteLine("AppendMessageAsync updateContent WebView 不可用，跳过更新");
                                 }
                             }
                             catch (Exception ex)
@@ -946,6 +1366,115 @@ namespace CoDesignStudy.Cad.PlugIn
 
             return await tcs.Task;
         }
+
+        // 使用QwenClient的流式调用
+        public async Task<string> GetAIResponseWithQwen(string userMessage, Action<string> updateContent)
+        {
+            string apiKey = Environment.GetEnvironmentVariable("DASHSCOPE_API_KEY");
+            if (string.IsNullOrEmpty(apiKey))
+            {
+                throw new Exception("API Key 未设置。请确保环境变量 'DASHSCOPE_API_KEY' 已设置。");
+            }
+
+            var client = new FunctionCallingAI.QwenClient("qwen-plus", apiKey);
+            
+            var resultMsg = new StringBuilder();
+            var tcs = new TaskCompletionSource<string>();
+            
+            // 准备消息列表
+            var messages = new List<FunctionCallingAI.ChatMessage>
+            {
+                new FunctionCallingAI.SystemChatMessage("你的名字是\"电气设计助手\"，是一个电气设计领域的AutoCAD助手，请回答有关电气设计领域的问题并返回原始的Markdown格式"),
+                new FunctionCallingAI.UserChatMessage(userMessage)
+            };
+            
+            try
+            {
+                // 定义流式回调处理函数
+                FunctionCallingAI.StreamingResponseHandler streamHandler = (FunctionCallingAI.StreamingChatCompletionUpdate update) =>
+                {
+                    try
+                    {
+                        System.Diagnostics.Debug.WriteLine($"GetAIResponseWithQwen 收到更新: Content='{update.Content}', IsFinished={update.IsFinished}");
+                        
+                        if (!string.IsNullOrEmpty(update.Content))
+                        {
+                            // 累积完整回复
+                            resultMsg.Append(update.Content);
+                            // 直接调用更新函数
+                            updateContent?.Invoke(resultMsg.ToString());
+                        }
+                        
+                        // 检查是否完成
+                        if (update.IsFinished)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"GetAIResponseWithQwen 流式完成，最终内容长度: {resultMsg.Length}");
+                            tcs.TrySetResult(resultMsg.ToString());
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"GetAIResponseWithQwen streamHandler异常: {ex.Message}");
+                        tcs.TrySetException(ex);
+                    }
+                };
+
+                System.Diagnostics.Debug.WriteLine("GetAIResponseWithQwen 开始发送流式请求");
+                
+                // 发送流式请求
+                await client.CompleteChatStreamingAsync(messages, streamHandler);
+                
+                System.Diagnostics.Debug.WriteLine("GetAIResponseWithQwen 流式请求发送完成，等待TaskCompletionSource");
+                
+                return await tcs.Task;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"GetAIResponseWithQwen 异常: {ex.Message}");
+                tcs.TrySetException(ex);
+                throw;
+            }
+            finally
+            {
+                client?.Dispose();
+            }
+        }
+
+        // 使用QwenClient的非流式调用
+        public async Task<string> GetAIResponseWithQwenNonStream(string userMessage)
+        {
+            string apiKey = Environment.GetEnvironmentVariable("DASHSCOPE_API_KEY");
+            if (string.IsNullOrEmpty(apiKey))
+            {
+                throw new Exception("API Key 未设置。请确保环境变量 'DASHSCOPE_API_KEY' 已设置。");
+            }
+
+            var client = new FunctionCallingAI.QwenClient("qwen-plus", apiKey);
+            
+            try
+            {
+                // 准备消息列表
+                var messages = new List<FunctionCallingAI.ChatMessage>
+                {
+                    new FunctionCallingAI.SystemChatMessage("你的名字是\"电气设计助手\"，是一个电气设计领域的AutoCAD助手，请回答有关电气设计领域的问题并返回原始的Markdown格式"),
+                    new FunctionCallingAI.UserChatMessage(userMessage)
+                };
+
+                // 发送非流式请求
+                var completion = await client.CompleteChatAsync(messages);
+                
+                return completion.Content ?? string.Empty;
+            }
+            catch (Exception ex)
+            {
+                throw new Exception($"QwenClient非流式调用失败: {ex.Message}", ex);
+            }
+            finally
+            {
+                client?.Dispose();
+            }
+        }
+
         // 非流式调用
         public static async Task<string> CallLLMAsync(string prompt)
         {
